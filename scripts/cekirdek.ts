@@ -30,6 +30,7 @@ import {
   veriHazirla,
 } from "../src/lib/train.ts";
 import { carpimKonumu, carpimSonucu } from "../src/lib/carpim.ts";
+import { aciDerece, birimleHale, izdusumCikar, kosinus } from "../src/lib/pca.ts";
 import { EGITIM_METNI } from "../src/data/metin.ts";
 
 const cizgi = (baslik: string) => console.log(`\n${"─".repeat(64)}\n${baslik}\n${"─".repeat(64)}`);
@@ -233,6 +234,98 @@ cizgi("5. ÇARPIM ANİMASYONU MODELLE AYNI SAYIYI ÜRETİYOR MU?");
   console.log(
     `Son terimden sonra y[${sonKonum.j}] = ${sonKonum.sonrakiToplam.toFixed(6)} · ` +
       `model: ${iz2.h0[sonKonum.j].toFixed(6)} → ${sonKonum.sonrakiToplam === iz2.h0[sonKonum.j] ? "AYNI" : "FARKLI"}`,
+  );
+}
+console.log();
+
+// ---------------------------------------------------------------------------
+cizgi("6. GÖMME KÜRESİ: PCA VE ÖĞRENİLEN YAPI");
+
+{
+  const izdusum = izdusumCikar(model.E);
+
+  // Bileşenler birbirine dik ve birim uzunlukta olmalı — güç yinelemesinin
+  // doğru çalıştığının ölçüsü bu.
+  const b = izdusum.bilesenler;
+  const boylar = b.map((v) => Math.sqrt(v.reduce((a, x) => a + x * x, 0)));
+  const dikligi = (i: number, j: number) => Math.abs(b[i].reduce((a, x, k) => a + x * b[j][k], 0));
+  console.log(`bileşen uzunlukları : ${boylar.map((x) => x.toFixed(6)).join("  ")}`);
+  console.log(
+    `diklik (iç çarpım)  : 1·2 ${dikligi(0, 1).toExponential(2)}  1·3 ${dikligi(0, 2).toExponential(2)}  2·3 ${dikligi(1, 2).toExponential(2)}`,
+  );
+  console.log(`ilk 3 bileşenin taşıdığı değişkenlik: ${(izdusum.aciklananOran * 100).toFixed(1)}%`);
+
+  const kalanlar = izdusum.noktalar.map((n) => n.kalan);
+  const ortKalan = kalanlar.reduce((a, x) => a + x, 0) / kalanlar.length;
+  console.log(
+    `izdüşümde hayatta kalan oran: ortalama ${(ortKalan * 100).toFixed(1)}% · ` +
+      `en düşük ${(Math.min(...kalanlar) * 100).toFixed(1)}% · en yüksek ${(Math.max(...kalanlar) * 100).toFixed(1)}%`,
+  );
+
+  // Aynı girdi iki kez çalıştırıldığında aynı izdüşüm çıkmalı (link paylaşılabilir olmalı).
+  const tekrar = izdusumCikar(model.E);
+  const enBuyukSapma = Math.max(
+    ...izdusum.noktalar.map((n, i) =>
+      Math.max(
+        Math.abs(n.x - tekrar.noktalar[i].x),
+        Math.abs(n.y - tekrar.noktalar[i].y),
+        Math.abs(n.z - tekrar.noktalar[i].z),
+      ),
+    ),
+  );
+  console.log(`iki çalıştırma arasındaki en büyük sapma: ${enBuyukSapma.toExponential(2)} → ${enBuyukSapma < 1e-9 ? "KARARLI" : "KARARSIZ"}`);
+
+  // Eğitim sesli harfleri birbirine yaklaştırdı mı?
+  const SESLI = "aeıioöuü";
+  const sesliMi = (id: number) => SESLI.includes(ALFABE[id]);
+  const harfIds = ALFABE.map((_, i) => i).filter((i) => /\p{L}/u.test(ALFABE[i]));
+
+  function ortalamaBenzerlik(birimler: Float64Array[], ayni: boolean): number {
+    let toplam = 0;
+    let sayi = 0;
+    for (const a of harfIds) {
+      for (const bId of harfIds) {
+        if (a >= bId) continue;
+        const ikisiDeSesli = sesliMi(a) && sesliMi(bId);
+        const ikisiDeSessiz = !sesliMi(a) && !sesliMi(bId);
+        const eslesme = ayni ? ikisiDeSesli : sesliMi(a) !== sesliMi(bId);
+        if (!eslesme) continue;
+        void ikisiDeSessiz;
+        toplam += kosinus(birimler[a], birimler[bId]);
+        sayi++;
+      }
+    }
+    return sayi === 0 ? NaN : toplam / sayi;
+  }
+
+  const egitilmemis = modelOlustur({ D: 16, katmanSayisi: 2, baglam: 8, seed: 1 });
+  const oncekiBirimler = birimleHale(egitilmemis.E);
+  const sonrakiBirimler = izdusum.birimler;
+
+  const oncesiSesli = ortalamaBenzerlik(oncekiBirimler, true);
+  const oncesiKarisik = ortalamaBenzerlik(oncekiBirimler, false);
+  const sonrasiSesli = ortalamaBenzerlik(sonrakiBirimler, true);
+  const sonrasiKarisik = ortalamaBenzerlik(sonrakiBirimler, false);
+
+  console.log(`\n                       sesli-sesli   sesli-sessiz   fark`);
+  console.log(
+    `eğitimden önce        ${say(oncesiSesli)}       ${say(oncesiKarisik)}    ${say(oncesiSesli - oncesiKarisik)}`,
+  );
+  console.log(
+    `eğitimden sonra       ${say(sonrasiSesli)}       ${say(sonrasiKarisik)}    ${say(sonrasiSesli - sonrasiKarisik)}`,
+  );
+  console.log(
+    `\nSesli harfler birbirine ${sonrasiSesli - sonrasiKarisik > oncesiSesli - oncesiKarisik ? "YAKLAŞTI" : "yaklaşmadı"}` +
+      ` — model sesli/sessiz ayrımını hiç görmedi, sadece metni okudu.`,
+  );
+
+  // Örnek bir çift
+  const a = ALFABE.indexOf("a");
+  const e = ALFABE.indexOf("e");
+  const k = ALFABE.indexOf("k");
+  console.log(
+    `\nörnek: a–e kosinüs ${say(kosinus(sonrakiBirimler[a], sonrakiBirimler[e]))} (${aciDerece(kosinus(sonrakiBirimler[a], sonrakiBirimler[e])).toFixed(1)}°) · ` +
+      `a–k ${say(kosinus(sonrakiBirimler[a], sonrakiBirimler[k]))} (${aciDerece(kosinus(sonrakiBirimler[a], sonrakiBirimler[k])).toFixed(1)}°)`,
   );
 }
 console.log();

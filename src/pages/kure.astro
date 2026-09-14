@@ -1,0 +1,32 @@
+---
+import Temel from "../layouts/Temel.astro";
+import KureEkrani from "../components/KureEkrani.tsx";
+---
+
+<Temel
+  baslik="Gömme küresi — dil modeli laboratuvarı"
+  aciklama="Her karakterin gömme vektörü bir küre üzerinde bir nokta. Benzerlik aradaki açı."
+>
+  <main class="mx-auto max-w-[1100px] px-4 py-8 sm:px-6">
+    <header class="mb-6 max-w-[62ch]">
+      <h1 class="mb-3 text-[22px] font-medium tracking-tight text-metin">
+        Harflerin durduğu yer
+      </h1>
+      <p class="text-[14px] leading-relaxed text-soluk">
+        Modelin her karakter için tuttuğu vektörü birim uzunluğa getirip küreye koyduk. Yön anlam
+        taşır, uzunluk taşımaz: iki karakterin benzerliği aralarındaki açıdır. Eğit düğmesine
+        basın — noktaların yer değiştirmesi, modelin harfler arasında bir yapı kurmasıdır.
+      </p>
+    </header>
+
+    <KureEkrani client:only="react" />
+
+    <footer class="mt-10 border-t border-cizgi pt-4 text-[11px] leading-relaxed text-cok-soluk">
+      <p>
+        Küre 16 boyutlu uzayın 3 boyuta izdüşümü ve bu kayıplı bir işlem. Seçtiğiniz çiftin
+        benzerliği her zaman 16 boyutta hesaplanır; küredeki görünen açı yanında ayrıca yazılır.
+        İkisi ayrıldığında yanılan resimdir.
+      </p>
+    </footer>
+  </main>
+</Temel>
