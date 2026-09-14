@@ -17,6 +17,7 @@ import { type Asama, asamaVektoru, asamalariCikar } from "../lib/asamalar.ts";
 import { durumOku, durumYaz, VARSAYILAN_DURUM } from "../lib/durum.ts";
 import { sayi, yuzde } from "../lib/bicim.ts";
 import { VektorSeridi } from "./VektorSeridi.tsx";
+import { DikkatHaritasi } from "./DikkatHaritasi.tsx";
 import { CarpimCanlandirma } from "./CarpimCanlandirma.tsx";
 
 /** Sabit süreli (çarpım olmayan) aşamaların oynatma süresi, kare cinsinden. */
@@ -53,8 +54,8 @@ export default function IleriGecisEkrani() {
   }, [durum, hazir]);
 
   const model = useMemo<Model>(
-    () => modelOlustur({ D: durum.D, katmanSayisi: durum.katman, baglam: 8, seed: durum.seed }),
-    [durum.D, durum.katman, durum.seed],
+    () => modelOlustur({ D: durum.D, katmanSayisi: durum.katman, baglam: 8, seed: durum.seed, dikkat: durum.dikkat }),
+    [durum.D, durum.katman, durum.seed, durum.dikkat],
   );
   const iz = useMemo<IleriIz>(
     () => ileriGecis(model, encode(durum.metin), durum.sicaklik),
@@ -165,6 +166,8 @@ export default function IleriGecisEkrani() {
         metin={durum.metin}
         onMetin={(m) => setDurum((d) => ({ ...d, metin: m }))}
         iz={iz}
+        dikkat={durum.dikkat}
+        onDikkat={() => setDurum((d) => ({ ...d, dikkat: !d.dikkat }))}
       />
 
       <AsamaSeridi asamalar={asamalar} secili={asamaIndeks} onSec={(i) => git(i)} />
@@ -238,7 +241,11 @@ export default function IleriGecisEkrani() {
 function altAdimSatiri(asama: Asama, model: Model): number {
   switch (asama.tur) {
     case "giris":
-      return model.Wgiris.satir;
+      return model.Wgiris?.satir ?? 0;
+    case "dikkat-qkv":
+      return model.dikkat?.Wq.satir ?? 0;
+    case "dikkat-cikis":
+      return model.dikkat?.Wo.satir ?? 0;
     case "genisle":
       return model.bloklar[asama.blok].W1.satir;
     case "daralt":
@@ -254,10 +261,14 @@ function MetinGirdisi({
   metin,
   onMetin,
   iz,
+  dikkat,
+  onDikkat,
 }: {
   metin: string;
   onMetin: (m: string) => void;
   iz: IleriIz;
+  dikkat: boolean;
+  onDikkat: () => void;
 }) {
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border border-cizgi bg-yuzey px-3 py-2">
@@ -275,6 +286,15 @@ function MetinGirdisi({
         modele giren son 8:{" "}
         <span className="text-soluk">{iz.baglamIds.map((id) => gorunurAd(id)).join("")}</span>
       </span>
+      <button
+        onClick={onDikkat}
+        title="Dikkat katmanını aç/kapat. Aşama listesi buna göre değişir."
+        className={`border px-2 py-0.5 text-[11px] transition-colors ${
+          dikkat ? "border-cizgi-parlak text-metin" : "border-cizgi text-cok-soluk hover:text-soluk"
+        }`}
+      >
+        dikkat {dikkat ? "açık" : "kapalı"}
+      </button>
     </div>
   );
 }
@@ -316,6 +336,16 @@ function kisaAd(a: Asama): string {
       return "token";
     case "gomme":
       return "gömme";
+    case "pozisyon":
+      return "pozisyon";
+    case "dikkat-qkv":
+      return "q · k · v";
+    case "dikkat-skor":
+      return "dikkat";
+    case "dikkat-karisim":
+      return "harman";
+    case "dikkat-cikis":
+      return "dikkat çıkışı";
     case "giris":
       return "giriş";
     case "genisle":
@@ -454,7 +484,23 @@ function AsamaGovdesi({
     case "gomme":
       return <Gommeler iz={iz} D={D} C={C} genislik={genislik} />;
 
+    case "pozisyon":
+      return <Pozisyonlar iz={iz} C={C} genislik={genislik} />;
+
+    case "dikkat-qkv":
+      return <SorguAnahtarDeger model={model} iz={iz} altAdim={altAdim} genislik={genislik} C={C} />;
+
+    case "dikkat-skor":
+      return <DikkatSkorlari iz={iz} genislik={genislik} />;
+
+    case "dikkat-karisim":
+      return <Harman iz={iz} C={C} genislik={genislik} />;
+
+    case "dikkat-cikis":
+      return <DikkatCikisi model={model} iz={iz} altAdim={altAdim} genislik={genislik} C={C} />;
+
     case "giris":
+      if (!iz.birlesik || !model.Wgiris || !model.bgiris) return null;
       return (
         <CarpimCanlandirma
           x={iz.birlesik}
@@ -551,12 +597,232 @@ function Gommeler({ iz, D, C, genislik }: { iz: IleriIz; D: number; C: number; g
           <VektorSeridi veri={vektor} genislik={serit} yukseklik={26} />
         </div>
       ))}
-      <div className="border-t border-cizgi pt-3">
-        <p className="mb-2 text-[11px] text-cok-soluk">
-          Uç uca eklenmiş hali — {C} × {D} = {C * D} sayı. Sıradaki aşama bunu tek bir {D}'lik
-          vektöre indirecek.
+      {iz.birlesik ? (
+        <div className="border-t border-cizgi pt-3">
+          <p className="mb-2 text-[11px] text-cok-soluk">
+            Uç uca eklenmiş hali — {C} × {D} = {C * D} sayı. Sıradaki aşama bunu tek bir {D}'lik
+            vektöre indirecek.
+          </p>
+          <VektorSeridi veri={iz.birlesik} genislik={genislik - 20} yukseklik={22} />
+        </div>
+      ) : (
+        <p className="border-t border-cizgi pt-3 text-[11px] leading-relaxed text-cok-soluk">
+          Dikkat açık olduğu için bu vektörler uç uca eklenmiyor: her biri ayrı bir konum olarak
+          kalıyor ve sıradaki aşamalarda birbirlerine bakabiliyorlar.
         </p>
-        <VektorSeridi veri={iz.birlesik} genislik={genislik - 20} yukseklik={22} />
+      )}
+    </div>
+  );
+}
+
+function Pozisyonlar({ iz, C, genislik }: { iz: IleriIz; C: number; genislik: number }) {
+  const d = iz.dikkat!;
+  const son = C - 1;
+  const serit = Math.min(genislik - 90, d.x[0].length * 46);
+  const olcek = useMemo(() => {
+    let enBuyuk = 1e-6;
+    for (const dizi of [iz.gommeler[son], d.x[son]]) {
+      for (const v of dizi) enBuyuk = Math.max(enBuyuk, Math.abs(v));
+    }
+    return enBuyuk;
+  }, [iz, d, son]);
+
+  return (
+    <div className="space-y-4">
+      <div className="space-y-2">
+        <p className="text-[11px] text-cok-soluk">
+          son konum ({gorunurAd(iz.baglamIds[son])}) için: gömme + pozisyon = dikkate giren vektör
+        </p>
+        {([["gömme", iz.gommeler[son]], ["pozisyon", d.x[son].map((v, i) => v - iz.gommeler[son][i])], ["toplam", d.x[son]]] as Array<[string, ArrayLike<number>]>).map(
+          ([ad, veri], i) => (
+            <div key={ad} className="flex items-center gap-2">
+              <span className="sayi w-4 text-metin">{i === 1 ? "+" : i === 2 ? "=" : " "}</span>
+              <span className="w-16 shrink-0 text-[10px] text-cok-soluk">{ad}</span>
+              <VektorSeridi veri={Float32Array.from(veri)} genislik={serit} yukseklik={26} olcek={olcek} />
+            </div>
+          ),
+        )}
+      </div>
+
+      <div className="space-y-1.5 border-t border-cizgi pt-3">
+        <p className="mb-1 text-[11px] text-cok-soluk">bütün konumlar, dikkate girmeye hazır</p>
+        {d.x.map((v, t) => (
+          <div key={t} className="flex items-center gap-3">
+            <div className="w-14 shrink-0">
+              <span className="sayi text-[13px] text-metin">{gorunurAd(iz.baglamIds[t])}</span>
+              <span className="ml-1 text-[10px] text-cok-soluk">t−{C - t}</span>
+            </div>
+            <VektorSeridi veri={v} genislik={Math.min(genislik - 90, v.length * 30)} yukseklik={20} olcek={olcek} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SorguAnahtarDeger({
+  model,
+  iz,
+  altAdim,
+  genislik,
+  C,
+}: {
+  model: Model;
+  iz: IleriIz;
+  altAdim: number;
+  genislik: number;
+  C: number;
+}) {
+  const d = iz.dikkat!;
+  const son = C - 1;
+  const serit = Math.min(genislik - 90, d.sorgu[0].length * 46);
+  return (
+    <div className="space-y-4">
+      <CarpimCanlandirma
+        x={d.x[son]}
+        W={model.dikkat!.Wq}
+        y={d.sorgu[son]}
+        altAdim={altAdim}
+        maxGenislik={genislik}
+        yEtiketi={(j) => `sorgu boyut ${j}`}
+      />
+      <div className="space-y-2 border-t border-cizgi pt-3">
+        <p className="text-[11px] text-cok-soluk">
+          son konumun ({gorunurAd(iz.baglamIds[son])}) üç vektörü — anahtar ve değer de aynı
+          biçimde, kendi matrisleriyle hesaplanıyor
+        </p>
+        {([["sorgu", d.sorgu[son]], ["anahtar", d.anahtar[son]], ["değer", d.deger[son]]] as Array<[string, Float32Array]>).map(
+          ([ad, veri]) => (
+            <div key={ad} className="flex items-center gap-2">
+              <span className="w-16 shrink-0 text-[10px] text-cok-soluk">{ad}</span>
+              <VektorSeridi veri={veri} genislik={serit} yukseklik={26} />
+            </div>
+          ),
+        )}
+      </div>
+    </div>
+  );
+}
+
+function DikkatSkorlari({ iz, genislik }: { iz: IleriIz; genislik: number }) {
+  const [ham, setHam] = useState(false);
+  return (
+    <div className="space-y-3">
+      <div className="flex border border-cizgi w-fit">
+        {([[false, "ağırlıklar (softmax sonrası)"], [true, "ham skorlar"]] as Array<[boolean, string]>).map(
+          ([deger, etiket]) => (
+            <button
+              key={etiket}
+              onClick={() => setHam(deger)}
+              className={`px-2 py-0.5 text-[11px] transition-colors ${
+                ham === deger ? "bg-cizgi text-metin" : "text-cok-soluk hover:text-soluk"
+              }`}
+            >
+              {etiket}
+            </button>
+          ),
+        )}
+      </div>
+      <DikkatHaritasi
+        dikkat={iz.dikkat!}
+        baglamIds={iz.baglamIds}
+        genislik={genislik}
+        skorGoster={ham}
+      />
+    </div>
+  );
+}
+
+function Harman({ iz, C, genislik }: { iz: IleriIz; C: number; genislik: number }) {
+  const d = iz.dikkat!;
+  const son = C - 1;
+  const agirlik = d.agirliklar[son];
+  const olcek = useMemo(() => {
+    let enBuyuk = 1e-6;
+    for (const v of d.deger) for (const x of v) enBuyuk = Math.max(enBuyuk, Math.abs(x));
+    return enBuyuk;
+  }, [d]);
+  const serit = Math.min(genislik - 190, d.deger[0].length * 30);
+
+  return (
+    <div className="space-y-3">
+      <p className="text-[11px] text-cok-soluk">
+        son konumun ağırlıkları × her konumun değer vektörü, hepsi toplanıyor
+      </p>
+      {d.deger.map((v, t) => (
+        <div key={t} className="flex items-center gap-3">
+          <span className="sayi w-6 text-[13px] text-metin">{gorunurAd(iz.baglamIds[t])}</span>
+          <span className="sayi w-14 text-right text-[11px] text-soluk">{yuzde(agirlik[t])}</span>
+          <span className="h-2 w-16 shrink-0 bg-yuzey-2">
+            <span
+              className="block h-full bg-cizgi-parlak"
+              style={{ width: `${Math.max(0.5, agirlik[t] * 100)}%` }}
+            />
+          </span>
+          <VektorSeridi veri={v} genislik={serit} yukseklik={20} olcek={olcek} />
+        </div>
+      ))}
+      <div className="border-t border-cizgi pt-3">
+        <p className="mb-1 text-[11px] text-cok-soluk">harman — ağırlıklı toplam</p>
+        <VektorSeridi
+          veri={d.karisim[son]}
+          genislik={Math.min(genislik - 40, d.karisim[son].length * 46)}
+          yukseklik={30}
+          olcek={olcek}
+        />
+      </div>
+    </div>
+  );
+}
+
+function DikkatCikisi({
+  model,
+  iz,
+  altAdim,
+  genislik,
+  C,
+}: {
+  model: Model;
+  iz: IleriIz;
+  altAdim: number;
+  genislik: number;
+  C: number;
+}) {
+  const d = iz.dikkat!;
+  const son = C - 1;
+  const o = useMemo(() => {
+    const v = new Float32Array(d.cikti[son].length);
+    for (let i = 0; i < v.length; i++) v[i] = d.cikti[son][i] - d.x[son][i];
+    return v;
+  }, [d, son]);
+  const olcek = useMemo(() => {
+    let enBuyuk = 1e-6;
+    for (const dizi of [d.x[son], o, d.cikti[son]]) for (const v of dizi) enBuyuk = Math.max(enBuyuk, Math.abs(v));
+    return enBuyuk;
+  }, [d, o, son]);
+  const serit = Math.min(genislik - 120, d.cikti[son].length * 46);
+
+  return (
+    <div className="space-y-4">
+      <CarpimCanlandirma
+        x={d.karisim[son]}
+        W={model.dikkat!.Wo}
+        y={o}
+        altAdim={altAdim}
+        maxGenislik={genislik}
+        yEtiketi={(j) => `ana yola eklenecek, boyut ${j}`}
+      />
+      <div className="space-y-2 border-t border-cizgi pt-3">
+        <p className="text-[11px] text-cok-soluk">artık bağlantı — dikkatin ürettiği ana yola eklenir</p>
+        {([["konumun kendi vektörü", d.x[son]], ["dikkatin ürettiği", o], ["toplam = h0", d.cikti[son]]] as Array<[string, Float32Array]>).map(
+          ([ad, veri], i) => (
+            <div key={ad} className="flex items-center gap-2">
+              <span className="sayi w-4 text-metin">{i === 1 ? "+" : i === 2 ? "=" : " "}</span>
+              <span className="w-36 shrink-0 text-[10px] text-cok-soluk">{ad}</span>
+              <VektorSeridi veri={veri} genislik={serit} yukseklik={26} olcek={olcek} />
+            </div>
+          ),
+        )}
       </div>
     </div>
   );

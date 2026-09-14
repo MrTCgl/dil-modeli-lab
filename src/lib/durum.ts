@@ -23,6 +23,8 @@ export interface Durum {
   adimSayisi: number;
   /** İleri geçiş ekranındaki çarpım canlandırmasının hızı (kare başına çarpma). */
   hiz: number;
+  /** Dikkat katmanı açık mı. */
+  dikkat: boolean;
 }
 
 export const VARSAYILAN_DURUM: Durum = {
@@ -34,6 +36,7 @@ export const VARSAYILAN_DURUM: Durum = {
   ogrenmeOrani: 0.2,
   adimSayisi: 600,
   hiz: 24,
+  dikkat: true,
 };
 
 function sayiOku(deger: string | null, varsayilan: number, enAz: number, enCok: number): number {
@@ -55,6 +58,7 @@ export function durumOku(): Durum {
     ogrenmeOrani: sayiOku(p.get("lr"), VARSAYILAN_DURUM.ogrenmeOrani, 0.001, 1),
     adimSayisi: Math.round(sayiOku(p.get("adim"), VARSAYILAN_DURUM.adimSayisi, 1, 2000)),
     hiz: sayiOku(p.get("hiz"), VARSAYILAN_DURUM.hiz, 0.25, 160),
+    dikkat: p.get("dikkat") === null ? VARSAYILAN_DURUM.dikkat : p.get("dikkat") !== "0",
   };
 }
 
@@ -69,6 +73,7 @@ export function durumYaz(durum: Durum): void {
   if (durum.ogrenmeOrani !== VARSAYILAN_DURUM.ogrenmeOrani) p.set("lr", String(durum.ogrenmeOrani));
   if (durum.adimSayisi !== VARSAYILAN_DURUM.adimSayisi) p.set("adim", String(durum.adimSayisi));
   if (durum.hiz !== VARSAYILAN_DURUM.hiz) p.set("hiz", String(durum.hiz));
+  if (durum.dikkat !== VARSAYILAN_DURUM.dikkat) p.set("dikkat", durum.dikkat ? "1" : "0");
   const sorgu = p.toString();
   const yeni = window.location.pathname + (sorgu ? `?${sorgu}` : "");
   window.history.replaceState(null, "", yeni);

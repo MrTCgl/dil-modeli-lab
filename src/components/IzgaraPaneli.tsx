@@ -30,19 +30,20 @@ interface Bozma {
 
 export default function IzgaraPaneli() {
   const [seed, setSeed] = useState(1);
+  const [dikkat, setDikkat] = useState(true);
   const [surum, setSurum] = useState(0);
   const [metin, setMetin] = useState("deniz kı");
 
   const model = useMemo<Model>(
-    () => modelOlustur({ D: 16, katmanSayisi: 2, baglam: 8, seed }),
-    [seed],
+    () => modelOlustur({ D: 16, katmanSayisi: 2, baglam: 8, seed, dikkat }),
+    [seed, dikkat],
   );
 
   // Bozmalar model değişince sıfırlanır (yeni modelin eski kaydı anlamsız).
   const bozmalarRef = useRef<Map<string, Bozma>>(new Map());
-  const suAnkiSeed = useRef(seed);
-  if (suAnkiSeed.current !== seed) {
-    suAnkiSeed.current = seed;
+  const suAnkiModel = useRef(model);
+  if (suAnkiModel.current !== model) {
+    suAnkiModel.current = model;
     bozmalarRef.current = new Map();
   }
 
@@ -87,7 +88,8 @@ export default function IzgaraPaneli() {
 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border border-cizgi bg-yuzey px-3 py-2">
         <span className="sayi text-[11px] text-cok-soluk">
-          {adet(parametreSayisi(model))} parametre · D=16 · 2 katman · bağlam 8
+          {adet(parametreSayisi(model))} parametre · D=16 · 2 katman · bağlam 8 ·{" "}
+          {dikkat ? "dikkatli" : "dikkatsiz"}
         </span>
         <div className="ml-auto flex items-center gap-2">
           <label className="text-[11px] text-cok-soluk" htmlFor="seed">
@@ -100,6 +102,15 @@ export default function IzgaraPaneli() {
             onChange={(e) => setSeed(Number(e.target.value) || 0)}
             className="sayi w-16 border border-cizgi bg-zemin px-2 py-1 text-[12px] text-metin"
           />
+          <button
+            onClick={() => setDikkat((d) => !d)}
+            className={`border px-2 py-1 text-[11px] transition-colors ${
+              dikkat ? "border-cizgi-parlak text-metin" : "border-cizgi text-cok-soluk hover:text-soluk"
+            }`}
+            title="Dikkat katmanını aç/kapat. Kapalıyken bağlam uç uca eklenip sabit bir projeksiyondan geçer."
+          >
+            dikkat {dikkat ? "açık" : "kapalı"}
+          </button>
           <button
             onClick={hepsiniGeriAl}
             disabled={bozmaSayisi === 0}

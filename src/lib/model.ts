@@ -58,6 +58,18 @@ export interface ModelAyarlari {
   baglam: number;
   /** Rastgele başlangıç tohumu. Aynı tohum = aynı model. */
   seed: number;
+  /**
+   * Dikkat katmanı açık mı?
+   *
+   * Açıkken bağlamdaki karakterler birbirine bakabilir: her konum, kendinden
+   * önceki konumlardan hangilerine ne kadar ağırlık vereceğine kendi karar
+   * verir. Kapalıyken bağlam uç uca eklenip sabit bir projeksiyondan geçer —
+   * pozisyon başına ağırlıklar öğrenilir ama karakterler birbirine bakamaz.
+   *
+   * İkisi de çalışır durumda tutuldu, çünkü asıl öğretici olan fark:
+   * "dikkat ne katıyor" sorusu ancak ikisini yan yana koyunca cevaplanıyor.
+   */
+  dikkat: boolean;
 }
 
 export const VARSAYILAN_AYAR: ModelAyarlari = {
@@ -65,6 +77,7 @@ export const VARSAYILAN_AYAR: ModelAyarlari = {
   katmanSayisi: 2,
   baglam: 8,
   seed: 1,
+  dikkat: true,
 };
 
 /** Tek bir MLP bloğu: x -> Linear(D, 4D) -> ReLU -> Linear(4D, D), artı artık bağlantı. */
@@ -75,13 +88,52 @@ export interface Blok {
   b2: Float32Array;
 }
 
+/**
+ * TEK BAŞLI NEDENSEL ÖZ-DİKKAT
+ * ----------------------------
+ * Her konum üç vektör üretir:
+ *   sorgu (q) — "ben ne arıyorum"
+ *   anahtar (k) — "bende ne var"
+ *   değer (v) — "bana bakılırsa ne veririm"
+ *
+ * Bir konumun başka bir konuma verdiği ağırlık, sorgusuyla o konumun
+ * anahtarının iç çarpımıdır. Skorlar softmax'tan geçirilip toplamı 1 olan
+ * ağırlıklara dönüşür, sonra değerlerin ağırlıklı toplamı alınır.
+ *
+ * "Nedensel" maske: bir konum yalnızca kendine ve kendinden öncekilere
+ * bakabilir. Sonraki karaktere bakabilseydi tahmin işi anlamını yitirirdi —
+ * cevabı kopya çekmiş olurdu.
+ *
+ * Tek başlı: gerçek modeller aynı işlemi birkaç "baş" ile paralel yapar ve
+ * sonuçları birleştirir. Mekanizma birebir aynı, sadece kaç kez tekrarlandığı
+ * değişiyor; tek başlı olanı anlayan çok başlıyı da anlamış olur.
+ */
+export interface DikkatKatmani {
+  /** Sorgu projeksiyonu: D × D. */
+  Wq: Matris;
+  /** Anahtar projeksiyonu: D × D. */
+  Wk: Matris;
+  /** Değer projeksiyonu: D × D. */
+  Wv: Matris;
+  /** Çıkış projeksiyonu: D × D. Dikkatin ürettiğini ana yola hazırlar. */
+  Wo: Matris;
+}
+
 export interface Model {
   ayar: ModelAyarlari;
   /** Gömme tablosu: V satır (her karakter için bir satır), D sütun. */
   E: Matris;
-  /** Giriş projeksiyonu: (C*D) satır, D sütun. */
-  Wgiris: Matris;
-  bgiris: Float32Array;
+  /**
+   * Pozisyon gömmeleri: C satır, D sütun. Sadece dikkat açıkken var.
+   * Dikkat kendi başına sıraya kör: "ab" ile "ba" ona aynı görünür. Her
+   * konuma öğrenilebilir bir vektör eklemek sırayı geri kazandırır.
+   */
+  P: Matris | null;
+  /** Dikkat katmanı — kapalıysa null. */
+  dikkat: DikkatKatmani | null;
+  /** Giriş projeksiyonu: (C*D) satır, D sütun. Dikkat açıkken null. */
+  Wgiris: Matris | null;
+  bgiris: Float32Array | null;
   bloklar: Blok[];
   /** Çıkış katmanı: D satır, V sütun. */
   Wcikis: Matris;
@@ -127,7 +179,7 @@ function rastgeleDoldur(m: Matris, rnd: () => number, std: number): void {
 }
 
 export function modelOlustur(ayar: ModelAyarlari = VARSAYILAN_AYAR): Model {
-  const { D, katmanSayisi, baglam, seed } = ayar;
+  const { D, katmanSayisi, baglam, seed, dikkat } = ayar;
   const V = SOZLUK_BOYUTU;
   const rnd = rastgeleUretec(seed);
 
@@ -136,8 +188,32 @@ export function modelOlustur(ayar: ModelAyarlari = VARSAYILAN_AYAR): Model {
   // görünmeleri ve eğitimle toplanmaları böylece izlenebilir olur.
   rastgeleDoldur(E, rnd, 0.5);
 
-  const Wgiris = matrisOlustur("Wgiriş (bağlam → h)", baglam * D, D);
-  rastgeleDoldur(Wgiris, rnd, Math.sqrt(2 / (baglam * D)));
+  let P: Matris | null = null;
+  let dikkatKatmani: DikkatKatmani | null = null;
+  let Wgiris: Matris | null = null;
+  let bgiris: Float32Array | null = null;
+
+  if (dikkat) {
+    P = matrisOlustur("P (pozisyonlar)", baglam, D);
+    rastgeleDoldur(P, rnd, 0.1);
+
+    const Wq = matrisOlustur("Wq (sorgu)", D, D);
+    const Wk = matrisOlustur("Wk (anahtar)", D, D);
+    const Wv = matrisOlustur("Wv (değer)", D, D);
+    const Wo = matrisOlustur("Wo (dikkat çıkışı)", D, D);
+    // Sorgu ve anahtar küçük başlar: skorlar büyük başlarsa softmax daha ilk
+    // adımda tek bir konuma kilitlenir ve gradyan neredeyse hiç akmaz.
+    rastgeleDoldur(Wq, rnd, Math.sqrt(1 / D) * 0.5);
+    rastgeleDoldur(Wk, rnd, Math.sqrt(1 / D) * 0.5);
+    rastgeleDoldur(Wv, rnd, Math.sqrt(1 / D));
+    // Wo da küçük: dikkat bloğu da artık bağlantıyla ana yola EKLENİYOR.
+    rastgeleDoldur(Wo, rnd, Math.sqrt(1 / D) * 0.5);
+    dikkatKatmani = { Wq, Wk, Wv, Wo };
+  } else {
+    Wgiris = matrisOlustur("Wgiriş (bağlam → h)", baglam * D, D);
+    rastgeleDoldur(Wgiris, rnd, Math.sqrt(2 / (baglam * D)));
+    bgiris = new Float32Array(D);
+  }
 
   const bloklar: Blok[] = [];
   for (let l = 0; l < katmanSayisi; l++) {
@@ -153,12 +229,29 @@ export function modelOlustur(ayar: ModelAyarlari = VARSAYILAN_AYAR): Model {
   const Wcikis = matrisOlustur("Wçıkış (h → skorlar)", D, V);
   rastgeleDoldur(Wcikis, rnd, Math.sqrt(2 / D));
 
-  return { ayar, E, Wgiris, bgiris: new Float32Array(D), bloklar, Wcikis, bcikis: new Float32Array(V) };
+  return {
+    ayar,
+    E,
+    P,
+    dikkat: dikkatKatmani,
+    Wgiris,
+    bgiris,
+    bloklar,
+    Wcikis,
+    bcikis: new Float32Array(V),
+  };
 }
 
 /** Modeldeki toplam öğrenilebilir sayı adedi. Arayüzde gösterilir. */
 export function parametreSayisi(model: Model): number {
-  let n = model.E.veri.length + model.Wgiris.veri.length + model.bgiris.length;
+  let n = model.E.veri.length;
+  if (model.P) n += model.P.veri.length;
+  if (model.dikkat) {
+    const d = model.dikkat;
+    n += d.Wq.veri.length + d.Wk.veri.length + d.Wv.veri.length + d.Wo.veri.length;
+  }
+  if (model.Wgiris) n += model.Wgiris.veri.length;
+  if (model.bgiris) n += model.bgiris.length;
   for (const b of model.bloklar) {
     n += b.W1.veri.length + b.b1.length + b.W2.veri.length + b.b2.length;
   }
@@ -235,12 +328,34 @@ export interface BlokIzi {
  * geri yayılım da aynı nesneyi kullanır. Yani ekranda görünen sayılarla
  * eğitimde kullanılan sayılar birebir aynıdır.
  */
+/**
+ * Dikkat katmanının bütün ara değerleri. Arayüz dikkat haritasını buradan
+ * çiziyor, geri yayılım da aynı kaydı kullanıyor.
+ */
+export interface DikkatIzi {
+  /** Gömme + pozisyon: dikkate giren vektörler (C × D). */
+  x: Float32Array[];
+  sorgu: Float32Array[];
+  anahtar: Float32Array[];
+  deger: Float32Array[];
+  /** Ham skorlar, √D'ye bölünmüş. Maskeli hücreler NaN. (C × C) */
+  skorlar: Float32Array[];
+  /** Softmax sonrası ağırlıklar; maskeli hücreler 0. Her satırın toplamı 1. */
+  agirliklar: Float32Array[];
+  /** Değerlerin ağırlıklı toplamı (C × D). */
+  karisim: Float32Array[];
+  /** x + karisim @ Wo — artık bağlantıdan sonra (C × D). */
+  cikti: Float32Array[];
+}
+
 export interface IleriIz {
   baglamIds: number[];
   /** Her bağlam pozisyonunun gömme vektörü (C tane, D uzunluğunda). */
   gommeler: Float32Array[];
-  /** Uç uca eklenmiş hali (C*D). */
-  birlesik: Float32Array;
+  /** Uç uca eklenmiş hali (C*D). Dikkat açıkken null. */
+  birlesik: Float32Array | null;
+  /** Dikkat katmanının kaydı. Dikkat kapalıyken null. */
+  dikkat: DikkatIzi | null;
   /** Giriş projeksiyonundan sonra (D). */
   h0: Float32Array;
   bloklar: BlokIzi[];
@@ -257,17 +372,28 @@ export function ileriGecis(model: Model, baglamIds: number[], sicaklik = 1): Ile
   // 1-2) Gömme araması. Bağlam kısaysa baştan boşlukla doldururuz.
   const ids = hizala(baglamIds, baglam);
   const gommeler: Float32Array[] = [];
-  const birlesik = new Float32Array(baglam * D);
   for (let t = 0; t < baglam; t++) {
     const satirBasi = ids[t] * D;
     const g = model.E.veri.subarray(satirBasi, satirBasi + D);
-    const kopya = new Float32Array(g); // izde saklamak için kopya
-    gommeler.push(kopya);
-    birlesik.set(kopya, t * D);
+    gommeler.push(new Float32Array(g)); // izde saklamak için kopya
   }
 
-  // 3) Giriş projeksiyonu: C*D -> D
-  const h0 = vektorMatris(birlesik, model.Wgiris, model.bgiris);
+  let birlesik: Float32Array | null = null;
+  let dikkatIzi: DikkatIzi | null = null;
+  let h0: Float32Array;
+
+  if (model.dikkat && model.P) {
+    dikkatIzi = dikkatGecisi(model, gommeler, baglam, D);
+    // Tahmini yapan, dizinin SON konumudur: bir sonraki karakteri o bekliyor.
+    h0 = dikkatIzi.cikti[baglam - 1];
+  } else if (model.Wgiris && model.bgiris) {
+    // 3) Giriş projeksiyonu: C*D -> D
+    birlesik = new Float32Array(baglam * D);
+    for (let t = 0; t < baglam; t++) birlesik.set(gommeler[t], t * D);
+    h0 = vektorMatris(birlesik, model.Wgiris, model.bgiris);
+  } else {
+    throw new Error("model ne dikkat ne giriş projeksiyonu içeriyor");
+  }
 
   // 4) MLP blokları
   let h = h0;
@@ -288,7 +414,85 @@ export function ileriGecis(model: Model, baglamIds: number[], sicaklik = 1): Ile
   const logits = vektorMatris(h, model.Wcikis, model.bcikis);
   const olasilik = softmax(logits, sicaklik);
 
-  return { baglamIds: ids, gommeler, birlesik, h0, bloklar: izler, logits, olasilik, sicaklik };
+  return { baglamIds: ids, gommeler, birlesik, dikkat: dikkatIzi, h0, bloklar: izler, logits, olasilik, sicaklik };
+}
+
+/**
+ * Dikkat geçişi.
+ *
+ * Bütün satırlar hesaplanıyor ama tahmini yalnızca son satır üretiyor.
+ * Diğer satırları da hesaplamamızın sebebi dikkat haritasının tamamını
+ * gösterebilmek — gerçek eğitimde de bütün konumlar aynı anda kendi
+ * sonraki karakterini tahmin eder, burada tek hedef olduğu için gradyan
+ * yalnızca son satırdan akar. (Sorgular hariç: anahtarlar ve değerler son
+ * satır üzerinden bütün konumlara gradyan taşır.)
+ */
+function dikkatGecisi(
+  model: Model,
+  gommeler: Float32Array[],
+  C: number,
+  D: number,
+): DikkatIzi {
+  const d = model.dikkat!;
+  const P = model.P!;
+  const olcek = 1 / Math.sqrt(D);
+
+  // Gömme + pozisyon. Dikkat kendi başına sıraya kör; sırayı buradan alıyor.
+  const x: Float32Array[] = [];
+  for (let t = 0; t < C; t++) {
+    const v = new Float32Array(D);
+    for (let i = 0; i < D; i++) v[i] = gommeler[t][i] + P.veri[t * D + i];
+    x.push(v);
+  }
+
+  const sorgu = x.map((v) => vektorMatris(v, d.Wq));
+  const anahtar = x.map((v) => vektorMatris(v, d.Wk));
+  const deger = x.map((v) => vektorMatris(v, d.Wv));
+
+  const skorlar: Float32Array[] = [];
+  const agirliklar: Float32Array[] = [];
+  const karisim: Float32Array[] = [];
+  const cikti: Float32Array[] = [];
+
+  for (let t = 0; t < C; t++) {
+    const satirSkor = new Float32Array(C).fill(NaN);
+    // Nedensel maske: t konumu yalnızca 0..t arasına bakabilir.
+    let enBuyuk = -Infinity;
+    for (let sVal = 0; sVal <= t; sVal++) {
+      let ic = 0;
+      for (let i = 0; i < D; i++) ic += sorgu[t][i] * anahtar[sVal][i];
+      const skor = ic * olcek; // √D'ye bölmek: D büyüdükçe skorlar şişip
+      satirSkor[sVal] = skor;  // softmax'ı tek noktaya kilitlemesin diye
+      if (skor > enBuyuk) enBuyuk = skor;
+    }
+
+    const satirAgirlik = new Float32Array(C);
+    let toplam = 0;
+    for (let sVal = 0; sVal <= t; sVal++) {
+      const e = Math.exp(satirSkor[sVal] - enBuyuk);
+      satirAgirlik[sVal] = e;
+      toplam += e;
+    }
+    for (let sVal = 0; sVal <= t; sVal++) satirAgirlik[sVal] /= toplam;
+
+    const c = new Float32Array(D);
+    for (let sVal = 0; sVal <= t; sVal++) {
+      const a = satirAgirlik[sVal];
+      if (a === 0) continue;
+      for (let i = 0; i < D; i++) c[i] += a * deger[sVal][i];
+    }
+
+    const o = vektorMatris(c, d.Wo);
+    const y = new Float32Array(D);
+    for (let i = 0; i < D; i++) y[i] = x[t][i] + o[i]; // artık bağlantı
+
+    skorlar.push(satirSkor);
+    agirliklar.push(satirAgirlik);
+    karisim.push(c);
+    cikti.push(y);
+  }
+
+  return { x, sorgu, anahtar, deger, skorlar, agirliklar, karisim, cikti };
 }
 
 /**
@@ -377,7 +581,14 @@ export function uret(
  * tanımlı ve hem worker hem ekran bu fonksiyonu kullanıyor.
  */
 export function agirlikDizileri(model: Model): Float32Array[] {
-  const liste: Float32Array[] = [model.E.veri, model.Wgiris.veri, model.bgiris];
+  const liste: Float32Array[] = [model.E.veri];
+  if (model.P) liste.push(model.P.veri);
+  if (model.dikkat) {
+    const d = model.dikkat;
+    liste.push(d.Wq.veri, d.Wk.veri, d.Wv.veri, d.Wo.veri);
+  }
+  if (model.Wgiris) liste.push(model.Wgiris.veri);
+  if (model.bgiris) liste.push(model.bgiris);
   for (const b of model.bloklar) liste.push(b.W1.veri, b.b1, b.W2.veri, b.b2);
   liste.push(model.Wcikis.veri, model.bcikis);
   return liste;

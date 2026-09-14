@@ -25,15 +25,18 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import {
   type Model,
   agirliklariYaz,
+  ileriGecis,
   modelOlustur,
   parametreSayisi,
 } from "../lib/model.ts";
+import { encode } from "../lib/tokenizer.ts";
 import type { EgitimCevabi, EgitimIstegi } from "../workers/egitim.ts";
 import { izgaralariTopla } from "../lib/izgaralar.ts";
 import { durumOku, durumYaz, VARSAYILAN_DURUM } from "../lib/durum.ts";
 import { adet, sayi } from "../lib/bicim.ts";
 import { AgirlikIzgarasi } from "./AgirlikIzgarasi.tsx";
 import { GommeKuresi } from "./GommeKuresi.tsx";
+import { DikkatHaritasi } from "./DikkatHaritasi.tsx";
 import { type DogrulamaNoktasi, KayipEgrisi } from "./KayipEgrisi.tsx";
 import { Kaydirac, KaydiracPaneli } from "./Kaydiraclar.tsx";
 import { Uretim } from "./Uretim.tsx";
@@ -56,8 +59,8 @@ export default function EgitimEkrani() {
 
   // Ekranın aynası: worker'dan gelen ağırlıklar bunun üzerine yazılır.
   const ayna = useMemo<Model>(
-    () => modelOlustur({ D: durum.D, katmanSayisi: durum.katman, baglam: 8, seed: durum.seed }),
-    [durum.D, durum.katman, durum.seed, yenileme],
+    () => modelOlustur({ D: durum.D, katmanSayisi: durum.katman, baglam: 8, seed: durum.seed, dikkat: durum.dikkat }),
+    [durum.D, durum.katman, durum.seed, durum.dikkat, yenileme],
   );
 
   const workerRef = useRef<Worker | null>(null);
@@ -194,6 +197,29 @@ export default function EgitimEkrani() {
       </section>
 
       <KaydiracPaneli>
+        <div className={calisiyor ? "opacity-45" : undefined}>
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="text-[12px] text-metin">Dikkat katmanı</span>
+            <button
+              onClick={() => setDurum((d) => ({ ...d, dikkat: !d.dikkat }))}
+              disabled={calisiyor}
+              className={`border px-2 py-0.5 text-[11px] transition-colors ${
+                durum.dikkat
+                  ? "border-cizgi-parlak text-metin"
+                  : "border-cizgi text-cok-soluk hover:text-soluk"
+              }`}
+            >
+              {durum.dikkat ? "açık" : "kapalı"}
+            </button>
+          </div>
+          <p className="mt-2 text-[10px] leading-snug text-cok-soluk">
+            Açıkken bağlamdaki karakterler birbirine bakabilir: her konum, öncesindeki hangi
+            konumlara ne kadar ağırlık vereceğine kendi karar verir. Kapalıyken bağlam uç uca
+            eklenip sabit bir projeksiyondan geçer — pozisyon başına ağırlıklar öğrenilir ama
+            karakterler birbirine bakamaz.
+            <span className="text-soluk"> · değiştirmek modeli baştan kurar, eğitim sıfırlanır.</span>
+          </p>
+        </div>
         <Kaydirac
           ad="Sıcaklık"
           aciklama="Softmax'tan önce skorları böler. Düşük değer modeli en olası harfe sabitler, yüksek değer dağıtır. Yalnızca üretimi etkiler; eğitim her zaman 1 ile yapılır."
@@ -274,8 +300,21 @@ export default function EgitimEkrani() {
           <h2 className="mb-2 text-[13px] font-medium text-metin">Gömme küresi</h2>
           <GommeKuresi model={ayna} surum={surum} yukseklik={400} />
         </section>
-        <Uretim model={ayna} adim={adim} sicaklik={durum.sicaklik} baslangic={durum.metin} />
+        {durum.dikkat ? (
+          <CanliDikkat model={ayna} metin={durum.metin} surum={surum} />
+        ) : (
+          <section className="border border-cizgi bg-yuzey p-3">
+            <h2 className="mb-2 text-[13px] font-medium text-metin">Dikkat haritası</h2>
+            <p className="text-[11px] leading-relaxed text-cok-soluk">
+              Dikkat katmanı kapalı. Açarsanız bağlamdaki karakterlerin birbirine ne kadar
+              baktığını buradan canlı izleyebilirsiniz — eğitimin başında dağılım neredeyse düz
+              olur, eğitim ilerledikçe keskinleşir.
+            </p>
+          </section>
+        )}
       </div>
+
+      <Uretim model={ayna} adim={adim} sicaklik={durum.sicaklik} baslangic={durum.metin} />
 
       <section className="space-y-3">
         <h2 className="text-[13px] font-medium text-metin">
@@ -299,6 +338,32 @@ export default function EgitimEkrani() {
         ))}
       </section>
     </div>
+  );
+}
+
+/**
+ * Eğitim sürerken dikkat haritası. Eğitimin başında satırlar neredeyse düz
+ * dağılır (model henüz nereye bakacağını bilmiyor); eğitim ilerledikçe
+ * belirli konumlara yığılmaya başlar. Ölçüldü: dağılımın ortalama entropisi
+ * 2,08'den (düz dağılım ln(8) = 2,079) 1,63'e iniyor.
+ */
+function CanliDikkat({ model, metin, surum }: { model: Model; metin: string; surum: number }) {
+  const iz = useMemo(() => ileriGecis(model, encode(metin), 1), [model, metin, surum]);
+  const [olcumRef, genislik] = genislikIzle();
+  return (
+    <section className="border border-cizgi bg-yuzey p-3" ref={olcumRef}>
+      <h2 className="mb-1 text-[13px] font-medium text-metin">Dikkat haritası</h2>
+      <p className="mb-3 text-[11px] text-cok-soluk">
+        "{metin}" bağlamında · eğitim ilerledikçe dağılımın keskinleşmesini izleyin
+      </p>
+      {iz.dikkat && (
+        <DikkatHaritasi
+          dikkat={iz.dikkat}
+          baglamIds={iz.baglamIds}
+          genislik={Math.max(260, genislik - 26)}
+        />
+      )}
+    </section>
   );
 }
 

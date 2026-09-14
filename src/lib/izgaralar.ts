@@ -33,13 +33,58 @@ export function izgaralariTopla(model: Model): IzgaraTanimi[] {
       satirEtiketi: (i) => gorunurAd(i),
       sutunEtiketi: seyrek(4),
     },
-    {
+  ];
+
+  if (model.P) {
+    liste.push({
+      matris: model.P,
+      aciklama:
+        "Pozisyon gömmeleri. Dikkat kendi başına sıraya kör — \"ab\" ile \"ba\" ona aynı görünür. Her konuma öğrenilebilir bir vektör eklemek sırayı geri kazandırır.",
+      satirEtiketi: (i) => `t−${C - i}`,
+      sutunEtiketi: seyrek(4),
+    });
+  }
+
+  if (model.dikkat) {
+    const d = model.dikkat;
+    liste.push(
+      {
+        matris: d.Wq,
+        aciklama:
+          "Sorgu projeksiyonu. Her konumun \"ben ne arıyorum\" vektörünü üretir; bu vektör diğer konumların anahtarlarıyla çarpılarak dikkat skorlarını verir.",
+        satirEtiketi: seyrek(4),
+        sutunEtiketi: seyrek(4),
+      },
+      {
+        matris: d.Wk,
+        aciklama: "Anahtar projeksiyonu. Her konumun \"bende ne var\" vektörü — sorgularla eşleşen taraf.",
+        satirEtiketi: seyrek(4),
+        sutunEtiketi: seyrek(4),
+      },
+      {
+        matris: d.Wv,
+        aciklama:
+          "Değer projeksiyonu. Bir konuma bakılırsa ne aktarılacağı. Dikkat ağırlıkları bu vektörleri harmanlar.",
+        satirEtiketi: seyrek(4),
+        sutunEtiketi: seyrek(4),
+      },
+      {
+        matris: d.Wo,
+        aciklama: "Dikkatin çıkış projeksiyonu. Harmanlanan değeri ana yola eklenecek biçime sokar.",
+        satirEtiketi: seyrek(4),
+        sutunEtiketi: seyrek(4),
+      },
+    );
+  }
+
+  if (model.Wgiris) {
+    liste.push({
       matris: model.Wgiris,
       aciklama: `Giriş projeksiyonu. Bağlamdaki ${C} gömme uç uca eklenir (${C}×${D}=${C * D} sayı) ve buradan tek bir ${D}'lık vektöre iner. Satır etiketleri hangi pozisyona ait olduğunu gösterir: t−1 en son karakter.`,
       satirEtiketi: (i) => (i % D === 0 ? `t−${C - Math.floor(i / D)}` : null),
       sutunEtiketi: seyrek(4),
-    },
-  ];
+    });
+  }
 
   model.bloklar.forEach((blok) => {
     liste.push({

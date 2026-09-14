@@ -71,8 +71,8 @@ export default function TTTKarsilastirma() {
 
   // --- temel model: worker'da eğitilir, burada aynalanır -------------------
   const temel = useMemo<Model>(
-    () => modelOlustur({ D: durum.D, katmanSayisi: durum.katman, baglam: 8, seed: durum.seed }),
-    [durum.D, durum.katman, durum.seed],
+    () => modelOlustur({ D: durum.D, katmanSayisi: durum.katman, baglam: 8, seed: durum.seed, dikkat: durum.dikkat }),
+    [durum.D, durum.katman, durum.seed, durum.dikkat],
   );
   const workerRef = useRef<Worker | null>(null);
   const [temelAdim, setTemelAdim] = useState(0);
@@ -208,10 +208,17 @@ export default function TTTKarsilastirma() {
   }, [olcumSurumu]);
 
   const harita = useMemo<HaritaOgesi[]>(() => {
-    const liste: HaritaOgesi[] = [
-      { matris: temel.E, hizli: false },
-      { matris: temel.Wgiris, hizli: false },
-    ];
+    const liste: HaritaOgesi[] = [{ matris: temel.E, hizli: false }];
+    if (temel.P) liste.push({ matris: temel.P, hizli: false });
+    if (temel.dikkat) {
+      liste.push(
+        { matris: temel.dikkat.Wq, hizli: false },
+        { matris: temel.dikkat.Wk, hizli: false },
+        { matris: temel.dikkat.Wv, hizli: false },
+        { matris: temel.dikkat.Wo, hizli: false },
+      );
+    }
+    if (temel.Wgiris) liste.push({ matris: temel.Wgiris, hizli: false });
     temel.bloklar.forEach((b) => {
       liste.push({ matris: b.W1, hizli: false });
       liste.push({ matris: b.W2, hizli: false });

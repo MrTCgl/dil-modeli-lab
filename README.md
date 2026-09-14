@@ -16,6 +16,7 @@ Karakter düzeyinde, minik bir dil modeli:
 - **Sözlük:** Türkçe alfabe (ç, ğ, ı, ö, ş, ü dahil) + boşluk, nokta, virgül → ~35 token
 - **Gömme boyutu (D):** varsayılan 16, 4–64 arası ayarlanabilir
 - **Bağlam:** son 8 karakter
+- **Dikkat:** tek başlı nedensel öz-dikkat (açılıp kapatılabilir). Açıkken konumlar birbirine bakabilir; kapalıyken bağlam uç uca eklenip sabit bir projeksiyondan geçer.
 - **Katmanlar:** 1–4 MLP bloğu — `x → Linear(D, 4D) → ReLU → Linear(4D, D)` + artık bağlantı
 - **Çıkış:** `Linear(D, V)` → softmax
 
@@ -25,7 +26,7 @@ Ağır iş Web Worker içinde çalışır, arayüz donmaz.
 ## Ekranlar
 
 1. **Ağırlıklar** (`/`) — modelin yedi matrisi de ısı haritası olarak. Her hücreye tıklayıp elle değiştirebilirsiniz; üstteki tahmin anında bozulur. Uzun ve dar matrisler okunur kalsın diye devrik gösterilir.
-2. **İleri geçiş** (`/ileri-gecis`) — bir tahmine giden 13 aşama tek tek. Matris çarpımı hücre hücre canlandırılır: hangi giriş hangi ağırlıkla çarpılıyor, ara toplam nereye gidiyor.
+2. **İleri geçiş** (`/ileri-gecis`) — bir tahmine giden aşamalar tek tek (dikkat açıkken 17, kapalıyken 13). Matris çarpımı hücre hücre canlandırılır: hangi giriş hangi ağırlıkla çarpılıyor, ara toplam nereye gidiyor.
 3. **Gömme küresi** (`/kure`) — her karakter küre üzerinde bir nokta, benzerlik aradaki açı. İki nokta seçince gerçek 16 boyutlu kosinüs benzerliği ve küredeki görünen açı yan yana yazılır.
 4. **Eğitim** (`/egitim`) — Web Worker'da eğitim, canlı kayıp eğrisi, bütün kaydıraçlar, eşzamanlı güncellenen küre ve ızgaralar, üretim paneli.
 5. **TTT modu** (`/ttt`) — donmuş model ile çıkarım anında son projeksiyon matrisini güncelleyen modelin aynı metin üzerindeki karşılaştırması.
@@ -66,6 +67,7 @@ npm run kontrol    # astro check + tsc
 - **Çarpım animasyonu modelle aynı sayıyı mı üretiyor?** 208 çıkışın tamamı, Float32 yuvarlaması dahil, birebir aynı.
 - **PCA doğru mu?** Bileşenler birim uzunlukta ve dik (iç çarpımlar ~1e-13), izdüşüm iki çalıştırmada birebir aynı.
 - **Eğitim gerçekten yapı kuruyor mu?** Sesli-sesli ile sesli-sessiz ortalama benzerlik farkı eğitimden önce −0.062, sonra +0.203. Model sesli/sessiz ayrımını hiç görmedi, sadece metni okudu.
+- **Dikkat ne katıyor?** Aynı tohum ve ayarlarla: dikkatsiz modelin doğrulama kaybı 2.796, dikkatli modelinki 2.414 — üstelik dikkatli model 912 parametre daha küçük. Dikkat dağılımının ortalama entropisi eğitimle 2.078'den 1.628'e iniyor (düz dağılım ln(8) = 2.079), yani eğitim dikkati keskinleştiriyor.
 - **TTT kazandırıyor mu?** Tekrar eden yeni bir metinde evet (ortalama kayıp 2.50 → 2.03); tek turluk ya da modelin zaten bildiği metinde hayır. Öğrenme oranı büyütüldükçe önce kazanç artar, sonra model kendini bozar.
 
 ## Lisans

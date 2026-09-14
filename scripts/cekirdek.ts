@@ -12,6 +12,7 @@
 import { ALFABE, SOZLUK_BOYUTU, decode, encode, normalize } from "../src/lib/tokenizer.ts";
 import {
   RASTGELE_KAYIP,
+  type Matris,
   type Model,
   ileriGecis,
   kayip,
@@ -65,9 +66,14 @@ cizgi("2. GRADYAN DOĞRULAMASI (sayısal türev ile karşılaştırma)");
  *     dL/dw ≈ (L(w+e) - L(w-e)) / (2e)
  * Geri yayılım doğruysa iki sayı birbirini tutmalı.
  *
- * Not: ağırlıklar Float32 tutuluyor, bu yüzden sayısal türev kaçınılmaz
- * olarak gürültülüdür. Beklenen bağıl hata 1e-2 mertebesinde; asıl aranan
- * şey işaretin ve büyüklüğün tutması.
+ * EPSILON NEDEN TEK DEĞİL
+ * Merkezi farkın iki ayrı hata kaynağı var ve ters yönde çalışıyorlar:
+ * kesme hatası epsilon² ile küçülür, yuvarlama hatası 1/epsilon ile büyür.
+ * Aradaki tatlı nokta her matriste farklı yerde — gradyanı büyük ve eğrisi
+ * keskin olan gömmelerde küçük epsilon, düz olan dikkat matrislerinde büyük
+ * epsilon daha iyi sonuç veriyor. Tek bir epsilon seçip "bu matris kaldı"
+ * demek yanlış olurdu, o yüzden birkaçını deneyip en iyisini yazıyoruz.
+ * Analitik gradyan yanlış olsaydı hiçbir epsilonda tutmazdı.
  */
 function gradyanSina(model: Model, baglam: number[], hedef: number): void {
   const grad: Gradyan = gradyanOlustur(model);
@@ -76,16 +82,29 @@ function gradyanSina(model: Model, baglam: number[], hedef: number): void {
 
   const adaylar: Array<{ ad: string; agirlik: Float32Array; gradyan: Float32Array }> = [
     { ad: "E", agirlik: model.E.veri, gradyan: grad.E.veri },
-    { ad: "Wgiriş", agirlik: model.Wgiris.veri, gradyan: grad.Wgiris.veri },
+  ];
+  if (model.P && grad.P) adaylar.push({ ad: "P (pozisyon)", agirlik: model.P.veri, gradyan: grad.P.veri });
+  if (model.dikkat && grad.dikkat) {
+    adaylar.push(
+      { ad: "Wq (sorgu)", agirlik: model.dikkat.Wq.veri, gradyan: grad.dikkat.Wq.veri },
+      { ad: "Wk (anahtar)", agirlik: model.dikkat.Wk.veri, gradyan: grad.dikkat.Wk.veri },
+      { ad: "Wv (değer)", agirlik: model.dikkat.Wv.veri, gradyan: grad.dikkat.Wv.veri },
+      { ad: "Wo (dikkat çıkışı)", agirlik: model.dikkat.Wo.veri, gradyan: grad.dikkat.Wo.veri },
+    );
+  }
+  if (model.Wgiris && grad.Wgiris) {
+    adaylar.push({ ad: "Wgiriş", agirlik: model.Wgiris.veri, gradyan: grad.Wgiris.veri });
+  }
+  adaylar.push(
     { ad: "W1 (katman 1)", agirlik: model.bloklar[0].W1.veri, gradyan: grad.bloklar[0].W1.veri },
     { ad: "W2 (katman 1)", agirlik: model.bloklar[0].W2.veri, gradyan: grad.bloklar[0].W2.veri },
     { ad: "W1 (katman 2)", agirlik: model.bloklar[1].W1.veri, gradyan: grad.bloklar[1].W1.veri },
     { ad: "Wçıkış", agirlik: model.Wcikis.veri, gradyan: grad.Wcikis.veri },
     { ad: "bçıkış", agirlik: model.bcikis, gradyan: grad.bcikis },
-  ];
+  );
 
-  const eps = 1e-2;
-  console.log("matris           indeks   analitik      sayısal    bağıl fark");
+  const epsilonlar = [1e-2, 1e-3];
+  console.log("matris              indeks   analitik      sayısal   bağıl fark  (eps)");
   let enKotu = 0;
   for (const aday of adaylar) {
     // Gradyanı sıfıra çok yakın olmayan bir hücre seç: sıfıra bölmeyelim.
@@ -101,30 +120,40 @@ function gradyanSina(model: Model, baglam: number[], hedef: number): void {
     const analitik = aday.gradyan[indeks];
     const eski = aday.agirlik[indeks];
 
-    aday.agirlik[indeks] = eski + eps;
-    const artiKayip = kayip(ileriGecis(model, baglam, 1).olasilik, hedef);
-    aday.agirlik[indeks] = eski - eps;
-    const eksiKayip = kayip(ileriGecis(model, baglam, 1).olasilik, hedef);
-    aday.agirlik[indeks] = eski;
+    let enIyiFark = Infinity;
+    let enIyiSayisal = 0;
+    let enIyiEps = 0;
+    for (const eps of epsilonlar) {
+      aday.agirlik[indeks] = eski + eps;
+      const artiKayip = kayip(ileriGecis(model, baglam, 1).olasilik, hedef);
+      aday.agirlik[indeks] = eski - eps;
+      const eksiKayip = kayip(ileriGecis(model, baglam, 1).olasilik, hedef);
+      aday.agirlik[indeks] = eski;
+      const sayisal = (artiKayip - eksiKayip) / (2 * eps);
+      const fark = Math.abs(analitik - sayisal) / Math.max(1e-8, Math.abs(analitik) + Math.abs(sayisal));
+      if (fark < enIyiFark) {
+        enIyiFark = fark;
+        enIyiSayisal = sayisal;
+        enIyiEps = eps;
+      }
+    }
 
-    const sayisal = (artiKayip - eksiKayip) / (2 * eps);
-    const fark = Math.abs(analitik - sayisal) / Math.max(1e-8, Math.abs(analitik) + Math.abs(sayisal));
-    enKotu = Math.max(enKotu, fark);
+    enKotu = Math.max(enKotu, enIyiFark);
     console.log(
-      `${aday.ad.padEnd(16)} ${String(indeks).padStart(6)}  ${say(analitik, 6)}  ${say(sayisal, 6)}  ${fark.toExponential(2)}`,
+      `${aday.ad.padEnd(19)} ${String(indeks).padStart(6)}  ${say(analitik, 6)}  ${say(enIyiSayisal, 6)}  ${enIyiFark.toExponential(2)}  (${enIyiEps})`,
     );
   }
-  console.log(`\nEn kötü bağıl fark: ${enKotu.toExponential(2)} → ${enKotu < 0.02 ? "GEÇTİ" : "KALDI"}`);
+  console.log(`\nEn kötü bağıl fark: ${enKotu.toExponential(2)} → ${enKotu < 1e-3 ? "GEÇTİ" : "KALDI"}`);
 }
 
-const sinaModel = modelOlustur({ D: 16, katmanSayisi: 2, baglam: 8, seed: 7 });
+const sinaModel = modelOlustur({ D: 16, katmanSayisi: 2, baglam: 8, seed: 7, dikkat: true });
 console.log(`Model: D=16, 2 katman, bağlam=8 — ${parametreSayisi(sinaModel).toLocaleString("tr-TR")} parametre\n`);
 gradyanSina(sinaModel, veri.ids.slice(100, 108), veri.ids[108]);
 
 // ---------------------------------------------------------------------------
 cizgi("3. EĞİTİM");
 
-const model = modelOlustur({ D: 16, katmanSayisi: 2, baglam: 8, seed: 1 });
+const model = modelOlustur({ D: 16, katmanSayisi: 2, baglam: 8, seed: 1, dikkat: true });
 const rnd = rastgeleUretec(42);
 const baslangic = encode("deniz ");
 
@@ -191,9 +220,13 @@ cizgi("5. ÇARPIM ANİMASYONU MODELLE AYNI SAYIYI ÜRETİYOR MU?");
  * eşit olmalı — yaklaşık değil, eşit.
  */
 {
+  // Çarpım animasyonu ileri geçişin her doğrusal katmanında kullanılıyor;
+  // Wgiriş yalnızca dikkatsiz modelde olduğu için burada onu kuruyoruz.
+  const duzModel = modelOlustur({ D: 16, katmanSayisi: 2, baglam: 8, seed: 1, dikkat: false });
+  const model = duzModel;
   const iz2 = ileriGecis(model, encode("kasabada deniz"), 1);
-  const sinamalar: Array<{ ad: string; x: Float32Array; W: typeof model.Wgiris; b: Float32Array; y: Float32Array }> = [
-    { ad: "birleşik @ Wgiriş", x: iz2.birlesik, W: model.Wgiris, b: model.bgiris, y: iz2.h0 },
+  const sinamalar: Array<{ ad: string; x: Float32Array; W: Matris; b: Float32Array; y: Float32Array }> = [
+    { ad: "birleşik @ Wgiriş", x: iz2.birlesik!, W: model.Wgiris!, b: model.bgiris!, y: iz2.h0 },
   ];
   model.bloklar.forEach((blok, l) => {
     sinamalar.push({ ad: `blok ${l + 1}: h @ W1`, x: iz2.bloklar[l].girdi, W: blok.W1, b: blok.b1, y: iz2.bloklar[l].oncesi });
@@ -229,9 +262,9 @@ cizgi("5. ÇARPIM ANİMASYONU MODELLE AYNI SAYIYI ÜRETİYOR MU?");
   );
 
   // Ara toplamlar da tutarlı ilerlemeli: son terimden sonraki değer sonuca eşit.
-  const W = model.Wgiris;
+  const W = model.Wgiris!;
   const sonAdim = W.satir * W.sutun - 1;
-  const sonKonum = carpimKonumu(iz2.birlesik, W, model.bgiris, sonAdim);
+  const sonKonum = carpimKonumu(iz2.birlesik!, W, model.bgiris!, sonAdim);
   console.log(
     `Son terimden sonra y[${sonKonum.j}] = ${sonKonum.sonrakiToplam.toFixed(6)} · ` +
       `model: ${iz2.h0[sonKonum.j].toFixed(6)} → ${sonKonum.sonrakiToplam === iz2.h0[sonKonum.j] ? "AYNI" : "FARKLI"}`,
@@ -299,7 +332,7 @@ cizgi("6. GÖMME KÜRESİ: PCA VE ÖĞRENİLEN YAPI");
     return sayi === 0 ? NaN : toplam / sayi;
   }
 
-  const egitilmemis = modelOlustur({ D: 16, katmanSayisi: 2, baglam: 8, seed: 1 });
+  const egitilmemis = modelOlustur({ D: 16, katmanSayisi: 2, baglam: 8, seed: 1, dikkat: true });
   const oncekiBirimler = birimleHale(egitilmemis.E);
   const sonrakiBirimler = izdusum.birimler;
 
@@ -424,6 +457,94 @@ cizgi("7. TTT: ÇIKARIM ANINDA ÖĞRENMEK KAZANDIRIYOR MU?");
       console.log(
         `  ${i + 1}.  ${say(turD[i] / turN[i])}  ${say(turH[i] / turN[i])}  ${say(turD[i] / turN[i] - turH[i] / turN[i])}`,
       );
+    }
+  }
+}
+console.log();
+
+// ---------------------------------------------------------------------------
+cizgi("8. DİKKAT KATMANI NE KATIYOR?");
+
+/**
+ * İki mimari, aynı tohum, aynı eğitim ayarları, aynı metin. Tek fark:
+ * birinde bağlam uç uca eklenip sabit bir projeksiyondan geçiyor, diğerinde
+ * karakterler birbirine bakabiliyor.
+ *
+ * Dikkatli modelin ayrıca DAHA AZ parametresi var: Wgiriş tek başına 2.048
+ * sayı tutuyor, dikkat katmanı pozisyon gömmeleriyle birlikte 1.152. Yani
+ * karşılaştırma dikkatin lehine şişirilmiş değil.
+ */
+{
+  function egit(dikkat: boolean, adimSayisi: number) {
+    const m = modelOlustur({ D: 16, katmanSayisi: 2, baglam: 8, seed: 1, dikkat });
+    const e = egiticiOlustur(m, veri, { ogrenmeOrani: 0.2, yigin: 32, sicaklik: 1, kirpma: 5 }, 4242);
+    for (let i = 0; i < adimSayisi; i++) egitimAdimi(e);
+    const son50 = e.gecmis.slice(-50).reduce((a, b) => a + b, 0) / 50;
+    return { model: m, egitimKaybi: son50, dogrulama: dogrulamaKaybi(m, veri, 200), parametre: parametreSayisi(m) };
+  }
+
+  console.log("mimari        parametre   eğitim kaybı   doğrulama");
+  const sonuclar: Record<string, ReturnType<typeof egit>> = {};
+  for (const [ad, dikkat] of [["dikkatsiz", false], ["dikkatli", true]] as Array<[string, boolean]>) {
+    const r = egit(dikkat, 3000);
+    sonuclar[ad] = r;
+    console.log(`${ad.padEnd(13)}${String(r.parametre).padStart(8)}   ${say(r.egitimKaybi)}      ${say(r.dogrulama)}`);
+  }
+  const d = sonuclar["dikkatsiz"];
+  const a = sonuclar["dikkatli"];
+  console.log(
+    `\nfark: eğitim ${say(d.egitimKaybi - a.egitimKaybi)} · doğrulama ${say(d.dogrulama - a.dogrulama)}` +
+      ` → dikkat ${a.dogrulama < d.dogrulama ? "KAZANDI" : "kazanmadı"} (doğrulamaya göre)`,
+  );
+
+  const baslangic2 = encode("kasabada deniz");
+  for (const ad of ["dikkatsiz", "dikkatli"]) {
+    const rnd2 = rastgeleUretec(7);
+    console.log(`\n${ad}: "${decode(baslangic2)}${decode(uret(sonuclar[ad].model, baslangic2, 140, 0.8, rnd2))}"`);
+  }
+
+  /**
+   * Dikkat gerçekten bir şeye bakıyor mu, yoksa düz mü dağıtıyor?
+   *
+   * Entropi bunu ölçer: düz dağılımda ln(C), tek bir konuma kilitlendiğinde 0.
+   * ÖNEMLİ: tek bir bağlamda ölçmek yanıltıyor — bazı bağlamlarda dikkat
+   * doğal olarak düz dağılır. Metnin yüzlerce yerinde ölçüp ortalamasını
+   * alıyoruz.
+   */
+  const duz = Math.log(8);
+  function ortalamaEntropi(m: Model): number {
+    let toplam = 0;
+    let n = 0;
+    for (let k = 200; k < 4000; k += 37) {
+      const iz = ileriGecis(m, veri.ids.slice(k - 8, k), 1);
+      if (!iz.dikkat) return NaN;
+      const satir = iz.dikkat.agirliklar[iz.dikkat.agirliklar.length - 1];
+      let e = 0;
+      for (const w of satir) if (w > 0) e -= w * Math.log(w);
+      toplam += e;
+      n++;
+    }
+    return toplam / n;
+  }
+
+  const egitilmemisDikkat = modelOlustur({ D: 16, katmanSayisi: 2, baglam: 8, seed: 1, dikkat: true });
+  const oncesi = ortalamaEntropi(egitilmemisDikkat);
+  const sonrasi = ortalamaEntropi(a.model);
+  console.log(
+    `\ndikkat dağılımının ortalama entropisi (${Math.round((4000 - 200) / 37)} bağlamda):` +
+      `\n  eğitimden önce ${oncesi.toFixed(4)} · sonra ${sonrasi.toFixed(4)} · düz dağılım ln(8) = ${duz.toFixed(4)}` +
+      `\n  → ${sonrasi < duz - 0.2 ? "eğitim dikkati KESKİNLEŞTİRDİ" : "dikkat düz kaldı"}`,
+  );
+
+  // Örnek bir bağlam — tek bağlama bakıp genel hüküm vermemek kaydıyla.
+  const iz3 = ileriGecis(a.model, encode("kasabada deniz "), 1);
+  if (iz3.dikkat) {
+    const sonSatir = iz3.dikkat.agirliklar[iz3.dikkat.agirliklar.length - 1];
+    const C = sonSatir.length;
+    console.log(`\nörnek bir bağlam ("${decode(iz3.baglamIds)}") — son konum neye bakıyor:`);
+    for (let t = 0; t < C; t++) {
+      const cubuk = "█".repeat(Math.round(sonSatir[t] * 40));
+      console.log(`  t−${C - t}  ${ALFABE[iz3.baglamIds[t]] === " " ? "␣" : ALFABE[iz3.baglamIds[t]]}  ${(sonSatir[t] * 100).toFixed(1).padStart(5)}%  ${cubuk}`);
     }
   }
 }

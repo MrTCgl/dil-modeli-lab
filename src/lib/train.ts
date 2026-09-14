@@ -50,10 +50,19 @@ export interface BlokGradyani {
   b2: Float32Array;
 }
 
+export interface DikkatGradyani {
+  Wq: Matris;
+  Wk: Matris;
+  Wv: Matris;
+  Wo: Matris;
+}
+
 export interface Gradyan {
   E: Matris;
-  Wgiris: Matris;
-  bgiris: Float32Array;
+  P: Matris | null;
+  dikkat: DikkatGradyani | null;
+  Wgiris: Matris | null;
+  bgiris: Float32Array | null;
   bloklar: BlokGradyani[];
   Wcikis: Matris;
   bcikis: Float32Array;
@@ -67,8 +76,17 @@ function bosMatris(m: Matris): Matris {
 export function gradyanOlustur(model: Model): Gradyan {
   return {
     E: bosMatris(model.E),
-    Wgiris: bosMatris(model.Wgiris),
-    bgiris: new Float32Array(model.bgiris.length),
+    P: model.P ? bosMatris(model.P) : null,
+    dikkat: model.dikkat
+      ? {
+          Wq: bosMatris(model.dikkat.Wq),
+          Wk: bosMatris(model.dikkat.Wk),
+          Wv: bosMatris(model.dikkat.Wv),
+          Wo: bosMatris(model.dikkat.Wo),
+        }
+      : null,
+    Wgiris: model.Wgiris ? bosMatris(model.Wgiris) : null,
+    bgiris: model.bgiris ? new Float32Array(model.bgiris.length) : null,
     bloklar: model.bloklar.map((b: Blok) => ({
       W1: bosMatris(b.W1),
       b1: new Float32Array(b.b1.length),
@@ -82,8 +100,15 @@ export function gradyanOlustur(model: Model): Gradyan {
 
 export function gradyanSifirla(g: Gradyan): void {
   g.E.veri.fill(0);
-  g.Wgiris.veri.fill(0);
-  g.bgiris.fill(0);
+  g.P?.veri.fill(0);
+  if (g.dikkat) {
+    g.dikkat.Wq.veri.fill(0);
+    g.dikkat.Wk.veri.fill(0);
+    g.dikkat.Wv.veri.fill(0);
+    g.dikkat.Wo.veri.fill(0);
+  }
+  g.Wgiris?.veri.fill(0);
+  g.bgiris?.fill(0);
   for (const b of g.bloklar) {
     b.W1.veri.fill(0);
     b.b1.fill(0);
@@ -183,7 +208,13 @@ export function geriYayilim(model: Model, iz: IleriIz, hedef: number, grad: Grad
     dCikti = dGirdi;
   }
 
+  if (model.dikkat && iz.dikkat && grad.dikkat && model.P && grad.P) {
+    dikkatGeriYayilim(model, iz, grad, dCikti, D);
+    return;
+  }
+
   // --- Giriş projeksiyonu: h0 = birlesik @ Wgiris + bgiris -----------------
+  if (!model.Wgiris || !model.bgiris || !grad.Wgiris || !grad.bgiris || !iz.birlesik) return;
   const CD = model.Wgiris.satir;
   const dBirlesik = new Float32Array(CD);
   for (let i = 0; i < CD; i++) {
@@ -211,6 +242,140 @@ export function geriYayilim(model: Model, iz: IleriIz, hedef: number, grad: Grad
   }
 }
 
+/**
+ * DİKKATİN GERİ YAYILIMI
+ * ======================
+ *
+ * Tahmini son konum ürettiği için gradyan da oradan giriyor. Yol şu:
+ *
+ *   y_T = x_T + o_T                     artık bağlantı: iki yola da geçer
+ *   o_T = c_T @ Wo                      alışılmış matris türevi
+ *   c_T = toplam_s a[s] · v_s           hem ağırlıklara hem değerlere gider
+ *   a   = softmax(skor)                 aşağıdaki tek satırlık kural
+ *   skor[s] = (q_T · k_s) / √D          sorguya ve anahtarlara dağılır
+ *   q,k,v   = x @ Wq, Wk, Wv            yine matris türevi
+ *   x_t = E[id_t] + P[t]                toplam olduğu için ikisine de aynen
+ *
+ * SOFTMAX'IN TÜREVİ
+ * Softmax'ın jakobiyeni tam yazılınca C×C'lik bir matris; ama kaybın
+ * gradyanıyla çarpımı tek satıra iniyor:
+ *     dskor[s] = a[s] · (da[s] − toplam_u a[u]·da[u])
+ * Sezgisi: bir ağırlığı artırmak zorunlu olarak diğerlerini azaltır
+ * (toplamları 1 olmak zorunda), o yüzden her terimden ortalama çıkarılıyor.
+ *
+ * NEDEN SADECE SON SATIR
+ * Dikkat haritasının bütün satırları ileri geçişte hesaplanıyor ama tahmini
+ * yalnızca son satır üretiyor; kalanı ekranda göstermek için. Dolayısıyla
+ * sorgu gradyanı yalnızca son konuma gidiyor. Anahtar ve değer gradyanları
+ * ise bütün konumlara ulaşıyor, çünkü son satır hepsine bakıyor.
+ */
+function dikkatGeriYayilim(
+  model: Model,
+  iz: IleriIz,
+  grad: Gradyan,
+  dY: Float32Array,
+  D: number,
+): void {
+  const d = model.dikkat!;
+  const gd = grad.dikkat!;
+  const gP = grad.P!;
+  const di = iz.dikkat!;
+  const C = iz.baglamIds.length;
+  const T = C - 1;
+  const olcek = 1 / Math.sqrt(D);
+
+  const dx: Float32Array[] = [];
+  for (let t = 0; t < C; t++) dx.push(new Float32Array(D));
+
+  // y_T = x_T + o_T
+  for (let i = 0; i < D; i++) dx[T][i] += dY[i];
+
+  // o_T = c_T @ Wo
+  const dKarisim = new Float32Array(D);
+  for (let i = 0; i < D; i++) {
+    const satir = i * D;
+    const ci = di.karisim[T][i];
+    let toplam = 0;
+    for (let j = 0; j < D; j++) {
+      gd.Wo.veri[satir + j] += ci * dY[j];
+      toplam += d.Wo.veri[satir + j] * dY[j];
+    }
+    dKarisim[i] = toplam;
+  }
+
+  // c_T = toplam_s a[s] * v_s
+  const dAgirlik = new Float32Array(C);
+  const dDeger: Float32Array[] = [];
+  for (let t = 0; t < C; t++) dDeger.push(new Float32Array(D));
+  for (let sVal = 0; sVal <= T; sVal++) {
+    let ic = 0;
+    const a = di.agirliklar[T][sVal];
+    for (let i = 0; i < D; i++) {
+      ic += dKarisim[i] * di.deger[sVal][i];
+      dDeger[sVal][i] += a * dKarisim[i];
+    }
+    dAgirlik[sVal] = ic;
+  }
+
+  // softmax
+  let ortalama = 0;
+  for (let sVal = 0; sVal <= T; sVal++) ortalama += di.agirliklar[T][sVal] * dAgirlik[sVal];
+  const dSkor = new Float32Array(C);
+  for (let sVal = 0; sVal <= T; sVal++) {
+    dSkor[sVal] = di.agirliklar[T][sVal] * (dAgirlik[sVal] - ortalama);
+  }
+
+  // skor[s] = (q_T · k_s) * olcek
+  const dSorgu = new Float32Array(D);
+  const dAnahtar: Float32Array[] = [];
+  for (let t = 0; t < C; t++) dAnahtar.push(new Float32Array(D));
+  for (let sVal = 0; sVal <= T; sVal++) {
+    const g = dSkor[sVal] * olcek;
+    if (g === 0) continue;
+    for (let i = 0; i < D; i++) {
+      dSorgu[i] += g * di.anahtar[sVal][i];
+      dAnahtar[sVal][i] += g * di.sorgu[T][i];
+    }
+  }
+
+  // q_T = x_T @ Wq
+  for (let i = 0; i < D; i++) {
+    const satir = i * D;
+    const xi = di.x[T][i];
+    let toplam = 0;
+    for (let j = 0; j < D; j++) {
+      gd.Wq.veri[satir + j] += xi * dSorgu[j];
+      toplam += d.Wq.veri[satir + j] * dSorgu[j];
+    }
+    dx[T][i] += toplam;
+  }
+
+  // k_s = x_s @ Wk ve v_s = x_s @ Wv — her konum için
+  for (let sVal = 0; sVal < C; sVal++) {
+    for (let i = 0; i < D; i++) {
+      const satir = i * D;
+      const xi = di.x[sVal][i];
+      let toplam = 0;
+      for (let j = 0; j < D; j++) {
+        gd.Wk.veri[satir + j] += xi * dAnahtar[sVal][j];
+        gd.Wv.veri[satir + j] += xi * dDeger[sVal][j];
+        toplam += d.Wk.veri[satir + j] * dAnahtar[sVal][j] + d.Wv.veri[satir + j] * dDeger[sVal][j];
+      }
+      dx[sVal][i] += toplam;
+    }
+  }
+
+  // x_t = E[id_t] + P[t] — toplamın gradyanı iki tarafa da aynen geçer
+  for (let t = 0; t < C; t++) {
+    const eSatir = iz.baglamIds[t] * D;
+    const pSatir = t * D;
+    for (let i = 0; i < D; i++) {
+      grad.E.veri[eSatir + i] += dx[t][i];
+      gP.veri[pSatir + i] += dx[t][i];
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Güncelleme
 // ---------------------------------------------------------------------------
@@ -225,8 +390,13 @@ export function gradyanNormu(g: Gradyan): number {
   return Math.sqrt(kare);
 }
 
+/** Sıra agirlikDizileri() ile birebir aynı olmak zorunda. */
 function gradyanDizileri(g: Gradyan): Float32Array[] {
-  const liste: Float32Array[] = [g.E.veri, g.Wgiris.veri, g.bgiris];
+  const liste: Float32Array[] = [g.E.veri];
+  if (g.P) liste.push(g.P.veri);
+  if (g.dikkat) liste.push(g.dikkat.Wq.veri, g.dikkat.Wk.veri, g.dikkat.Wv.veri, g.dikkat.Wo.veri);
+  if (g.Wgiris) liste.push(g.Wgiris.veri);
+  if (g.bgiris) liste.push(g.bgiris);
   for (const b of g.bloklar) liste.push(b.W1.veri, b.b1, b.W2.veri, b.b2);
   liste.push(g.Wcikis.veri, g.bcikis);
   return liste;

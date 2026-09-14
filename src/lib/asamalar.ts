@@ -17,6 +17,11 @@ import type { IleriIz, Model } from "./model.ts";
 export type AsamaTuru =
   | "tokenler"
   | "gomme"
+  | "pozisyon"
+  | "dikkat-qkv"
+  | "dikkat-skor"
+  | "dikkat-karisim"
+  | "dikkat-cikis"
   | "giris"
   | "genisle"
   | "relu"
@@ -54,14 +59,59 @@ export function asamalariCikar(model: Model, iz: IleriIz): Asama[] {
       aciklama: `Her token id, gömme tablosunda bir satırı işaret eder: ${D} sayı. ${C} karakter için ${C} vektör alınır ve uç uca eklenir — ${C * D} sayılık tek bir dizi.`,
       altAdim: 0,
     },
-    {
+  ];
+
+  if (model.dikkat && model.P) {
+    liste.push(
+      {
+        tur: "pozisyon",
+        blok: -1,
+        baslik: "Pozisyon ekleniyor",
+        aciklama:
+          "Dikkat kendi başına sıraya kördür: ona bağlam bir küme gibi görünür, \"ab\" ile \"ba\" aynı çıkar. Her konuma o konuma ait öğrenilebilir bir vektör ekleyerek sırayı geri veriyoruz.",
+        altAdim: 0,
+      },
+      {
+        tur: "dikkat-qkv",
+        blok: -1,
+        baslik: "Sorgu, anahtar, değer",
+        aciklama:
+          "Her konum üç vektör üretir: sorgu (\"ben ne arıyorum\"), anahtar (\"bende ne var\") ve değer (\"bana bakılırsa ne veririm\"). Üçü de aynı vektörden, üç ayrı matrisle çıkar.",
+        altAdim: model.dikkat.Wq.satir * model.dikkat.Wq.sutun,
+      },
+      {
+        tur: "dikkat-skor",
+        blok: -1,
+        baslik: "Dikkat skorları ve maske",
+        aciklama: `Her konumun sorgusu, her konumun anahtarıyla çarpılır; çıkan skor √${D} = ${Math.sqrt(D).toFixed(2)}'e bölünür (bölünmezse skorlar şişip softmax tek noktaya kilitlenir). Nedensel maske geleceği kapatır: bir konum yalnızca kendine ve öncesine bakabilir. Sonrasına bakabilseydi cevabı kopya çekmiş olurdu.`,
+        altAdim: 0,
+      },
+      {
+        tur: "dikkat-karisim",
+        blok: -1,
+        baslik: "Değerlerin harmanı",
+        aciklama:
+          "Softmax'tan çıkan ağırlıklarla değer vektörlerinin ağırlıklı toplamı alınır. Bir konuma verilen ağırlık ne kadar büyükse o konumun değeri harmanda o kadar baskındır.",
+        altAdim: 0,
+      },
+      {
+        tur: "dikkat-cikis",
+        blok: -1,
+        baslik: "Dikkat çıkışı ve artık bağlantı",
+        aciklama:
+          "Harman bir projeksiyondan geçip konumun kendi vektörünün ÜSTÜNE eklenir — yerine geçmez. Tahmini yapan, dizinin son konumudur: bir sonraki karakteri o bekliyor.",
+        altAdim: model.dikkat.Wo.satir * model.dikkat.Wo.sutun,
+      },
+    );
+  } else if (model.Wgiris) {
+    liste.push({
       tur: "giris",
       blok: -1,
       baslik: "Giriş projeksiyonu",
       aciklama: `${C * D} sayı tek bir ${D}'lik vektöre iniyor. Bağlamdaki sıra bilgisi burada korunur: her pozisyonun kendi ağırlıkları var.`,
       altAdim: model.Wgiris.satir * model.Wgiris.sutun,
-    },
-  ];
+    });
+  }
 
   model.bloklar.forEach((blok, l) => {
     liste.push({
@@ -121,7 +171,18 @@ export function asamaVektoru(asama: Asama, iz: IleriIz): { ad: string; veri: Flo
   switch (asama.tur) {
     case "tokenler":
     case "gomme":
-      return { ad: `birleşik bağlam (${iz.birlesik.length})`, veri: iz.birlesik };
+      if (iz.birlesik) return { ad: `birleşik bağlam (${iz.birlesik.length})`, veri: iz.birlesik };
+      return { ad: `son konumun gömmesi (${iz.gommeler[iz.gommeler.length - 1].length})`, veri: iz.gommeler[iz.gommeler.length - 1] };
+    case "pozisyon":
+      return { ad: `son konum: gömme + pozisyon`, veri: iz.dikkat!.x[iz.dikkat!.x.length - 1] };
+    case "dikkat-qkv":
+      return { ad: `son konumun sorgusu`, veri: iz.dikkat!.sorgu[iz.dikkat!.sorgu.length - 1] };
+    case "dikkat-skor":
+      return { ad: `son konumun dikkat ağırlıkları`, veri: iz.dikkat!.agirliklar[iz.dikkat!.agirliklar.length - 1] };
+    case "dikkat-karisim":
+      return { ad: `harman (${iz.dikkat!.karisim[0].length})`, veri: iz.dikkat!.karisim[iz.dikkat!.karisim.length - 1] };
+    case "dikkat-cikis":
+      return { ad: `h0 (${iz.h0.length})`, veri: iz.h0 };
     case "giris":
       return { ad: `h0 (${iz.h0.length})`, veri: iz.h0 };
     case "genisle":

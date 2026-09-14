@@ -29,8 +29,8 @@ export default function KureEkrani() {
 
   const [yenileme, setYenileme] = useState(0);
   const model = useMemo<Model>(
-    () => modelOlustur({ D: durum.D, katmanSayisi: durum.katman, baglam: 8, seed: durum.seed }),
-    [durum.D, durum.katman, durum.seed, yenileme],
+    () => modelOlustur({ D: durum.D, katmanSayisi: durum.katman, baglam: 8, seed: durum.seed, dikkat: durum.dikkat }),
+    [durum.D, durum.katman, durum.seed, durum.dikkat, yenileme],
   );
 
   return (
