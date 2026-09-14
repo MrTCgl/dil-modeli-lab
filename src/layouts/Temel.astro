@@ -7,6 +7,15 @@ interface Props {
 }
 
 const { baslik, aciklama } = Astro.props;
+const yol = Astro.url.pathname;
+
+// Ekranlar modelin yaptığı işin sırasıyla dizilir: önce ağırlıklar (model
+// nedir), sonra ileri geçiş (model ne yapar). Sonraki adımlarda küre,
+// eğitim ve TTT buraya eklenecek.
+const ekranlar = [
+  { yol: "/", ad: "ağırlıklar" },
+  { yol: "/ileri-gecis", ad: "ileri geçiş" },
+];
 ---
 
 <!doctype html>
@@ -19,6 +28,26 @@ const { baslik, aciklama } = Astro.props;
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%2310131a'/><rect x='3' y='3' width='4' height='4' fill='%2345c8bb'/><rect x='9' y='9' width='4' height='4' fill='%23eda14a'/></svg>" />
   </head>
   <body>
+    <nav class="border-b border-cizgi" aria-label="ekranlar">
+      <div class="mx-auto flex max-w-[1100px] items-center gap-1 px-4 sm:px-6">
+        {
+          ekranlar.map((e) => (
+            <a
+              href={e.yol}
+              aria-current={yol === e.yol ? "page" : undefined}
+              class:list={[
+                "border-b-2 px-3 py-2.5 text-[12px] transition-colors",
+                yol === e.yol
+                  ? "border-cizgi-parlak text-metin"
+                  : "border-transparent text-cok-soluk hover:text-soluk",
+              ]}
+            >
+              {e.ad}
+            </a>
+          ))
+        }
+      </div>
+    </nav>
     <slot />
   </body>
 </html>

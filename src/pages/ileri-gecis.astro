@@ -1,0 +1,31 @@
+---
+import Temel from "../layouts/Temel.astro";
+import IleriGecis from "../components/IleriGecis.tsx";
+---
+
+<Temel
+  baslik="İleri geçiş — dil modeli laboratuvarı"
+  aciklama="Bir dil modelinin tek bir karakteri tahmin ederken yaptığı her işlem, adım adım."
+>
+  <main class="mx-auto max-w-[1100px] px-4 py-8 sm:px-6">
+    <header class="mb-6 max-w-[62ch]">
+      <h1 class="mb-3 text-[22px] font-medium tracking-tight text-metin">
+        Bir tahmin nasıl çıkar
+      </h1>
+      <p class="text-[14px] leading-relaxed text-soluk">
+        Aşağıdaki kutuya bir şey yazın. Model son sekiz karaktere bakıp bir sonrakini tahmin
+        edecek — ve bu sayfa o tahmine giden her işlemi tek tek gösterecek. Matris çarpımlarını
+        hücre hücre izleyebilir, dilediğiniz yerde durdurabilirsiniz.
+      </p>
+    </header>
+
+    <IleriGecis client:load />
+
+    <footer class="mt-10 border-t border-cizgi pt-4 text-[11px] leading-relaxed text-cok-soluk">
+      <p>
+        Ekrandaki bütün sayılar ileri geçişin kaydından okunur: modelin gerçekten hesapladığı
+        değerlerdir. Ara toplamlar da animasyon için değil, x ve W'den yeniden hesaplanır.
+      </p>
+    </footer>
+  </main>
+</Temel>

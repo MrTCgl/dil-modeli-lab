@@ -29,6 +29,7 @@ import {
   gradyanOlustur,
   veriHazirla,
 } from "../src/lib/train.ts";
+import { carpimKonumu, carpimSonucu } from "../src/lib/carpim.ts";
 import { EGITIM_METNI } from "../src/data/metin.ts";
 
 const cizgi = (baslik: string) => console.log(`\n${"─".repeat(64)}\n${baslik}\n${"─".repeat(64)}`);
@@ -174,5 +175,64 @@ for (const { p, i } of sirali) {
   const ad = ALFABE[i] === " " ? "␣" : ALFABE[i];
   const cubuk = "█".repeat(Math.round(p * 40));
   console.log(`  ${ad}  ${(p * 100).toFixed(1).padStart(5)}%  ${cubuk}`);
+}
+console.log();
+
+// ---------------------------------------------------------------------------
+cizgi("5. ÇARPIM ANİMASYONU MODELLE AYNI SAYIYI ÜRETİYOR MU?");
+
+/**
+ * İleri geçiş ekranı matris çarpımını terim terim canlandırıyor. Bu
+ * animasyonun "gösteri" olmadığını, modelin yaptığı işin aynısı olduğunu
+ * kanıtlamak lazım: her çıkış için terimleri tek tek toplayıp sonucu modelin
+ * ürettiği değerle karşılaştırıyoruz. Float32 yuvarlaması dahil, birebir
+ * eşit olmalı — yaklaşık değil, eşit.
+ */
+{
+  const iz2 = ileriGecis(model, encode("kasabada deniz"), 1);
+  const sinamalar: Array<{ ad: string; x: Float32Array; W: typeof model.Wgiris; b: Float32Array; y: Float32Array }> = [
+    { ad: "birleşik @ Wgiriş", x: iz2.birlesik, W: model.Wgiris, b: model.bgiris, y: iz2.h0 },
+  ];
+  model.bloklar.forEach((blok, l) => {
+    sinamalar.push({ ad: `blok ${l + 1}: h @ W1`, x: iz2.bloklar[l].girdi, W: blok.W1, b: blok.b1, y: iz2.bloklar[l].oncesi });
+    sinamalar.push({ ad: `blok ${l + 1}: relu @ W2`, x: iz2.bloklar[l].relu, W: blok.W2, b: blok.b2, y: iz2.bloklar[l].dal });
+  });
+  const sonH = iz2.bloklar[iz2.bloklar.length - 1].cikti;
+  sinamalar.push({ ad: "h @ Wçıkış", x: sonH, W: model.Wcikis, b: model.bcikis, y: iz2.logits });
+
+  let toplamCikis = 0;
+  let hataliCikis = 0;
+  let enBuyukFark = 0;
+  for (const s of sinamalar) {
+    let farkli = 0;
+    let enKotu = 0;
+    for (let j = 0; j < s.W.sutun; j++) {
+      const animasyon = carpimSonucu(s.x, s.W, s.b, j);
+      const modelDegeri = s.y[j];
+      const fark = Math.abs(animasyon - modelDegeri);
+      if (fark > 0) farkli++;
+      enKotu = Math.max(enKotu, fark);
+      toplamCikis++;
+    }
+    hataliCikis += farkli;
+    enBuyukFark = Math.max(enBuyukFark, enKotu);
+    console.log(
+      `${s.ad.padEnd(22)} ${String(s.W.sutun).padStart(3)} çıkış · ${String(s.W.satir * s.W.sutun).padStart(5)} çarpma · ` +
+        `ayrılan ${farkli} · en büyük fark ${enKotu === 0 ? "0" : enKotu.toExponential(2)}`,
+    );
+  }
+  console.log(
+    `\nToplam ${toplamCikis} çıkışın ${toplamCikis - hataliCikis} tanesi birebir aynı → ` +
+      `${hataliCikis === 0 ? "GEÇTİ" : "KALDI"}`,
+  );
+
+  // Ara toplamlar da tutarlı ilerlemeli: son terimden sonraki değer sonuca eşit.
+  const W = model.Wgiris;
+  const sonAdim = W.satir * W.sutun - 1;
+  const sonKonum = carpimKonumu(iz2.birlesik, W, model.bgiris, sonAdim);
+  console.log(
+    `Son terimden sonra y[${sonKonum.j}] = ${sonKonum.sonrakiToplam.toFixed(6)} · ` +
+      `model: ${iz2.h0[sonKonum.j].toFixed(6)} → ${sonKonum.sonrakiToplam === iz2.h0[sonKonum.j] ? "AYNI" : "FARKLI"}`,
+  );
 }
 console.log();
