@@ -17,6 +17,12 @@ export interface Durum {
   katman: number;
   sicaklik: number;
   metin: string;
+  /** Gradyan inişinin adım büyüklüğü. */
+  ogrenmeOrani: number;
+  /** "Eğit" düğmesine basınca kaç adım atılacak. */
+  adimSayisi: number;
+  /** İleri geçiş ekranındaki çarpım canlandırmasının hızı (kare başına çarpma). */
+  hiz: number;
 }
 
 export const VARSAYILAN_DURUM: Durum = {
@@ -25,6 +31,9 @@ export const VARSAYILAN_DURUM: Durum = {
   katman: 2,
   sicaklik: 1,
   metin: "kasabada deniz",
+  ogrenmeOrani: 0.2,
+  adimSayisi: 600,
+  hiz: 24,
 };
 
 function sayiOku(deger: string | null, varsayilan: number, enAz: number, enCok: number): number {
@@ -43,6 +52,9 @@ export function durumOku(): Durum {
     katman: Math.round(sayiOku(p.get("katman"), VARSAYILAN_DURUM.katman, 1, 4)),
     sicaklik: sayiOku(p.get("sicaklik"), VARSAYILAN_DURUM.sicaklik, 0.1, 2),
     metin: p.get("metin") ?? VARSAYILAN_DURUM.metin,
+    ogrenmeOrani: sayiOku(p.get("lr"), VARSAYILAN_DURUM.ogrenmeOrani, 0.001, 1),
+    adimSayisi: Math.round(sayiOku(p.get("adim"), VARSAYILAN_DURUM.adimSayisi, 1, 2000)),
+    hiz: sayiOku(p.get("hiz"), VARSAYILAN_DURUM.hiz, 0.25, 160),
   };
 }
 
@@ -54,6 +66,9 @@ export function durumYaz(durum: Durum): void {
   if (durum.katman !== VARSAYILAN_DURUM.katman) p.set("katman", String(durum.katman));
   if (durum.sicaklik !== VARSAYILAN_DURUM.sicaklik) p.set("sicaklik", String(durum.sicaklik));
   if (durum.metin !== VARSAYILAN_DURUM.metin) p.set("metin", durum.metin);
+  if (durum.ogrenmeOrani !== VARSAYILAN_DURUM.ogrenmeOrani) p.set("lr", String(durum.ogrenmeOrani));
+  if (durum.adimSayisi !== VARSAYILAN_DURUM.adimSayisi) p.set("adim", String(durum.adimSayisi));
+  if (durum.hiz !== VARSAYILAN_DURUM.hiz) p.set("hiz", String(durum.hiz));
   const sorgu = p.toString();
   const yeni = window.location.pathname + (sorgu ? `?${sorgu}` : "");
   window.history.replaceState(null, "", yeni);

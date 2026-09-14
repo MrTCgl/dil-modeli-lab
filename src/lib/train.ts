@@ -31,6 +31,7 @@ import {
   type IleriIz,
   type Matris,
   type Model,
+  agirlikDizileri,
   ileriGecis,
   kayip,
   matrisOlustur,
@@ -231,13 +232,6 @@ function gradyanDizileri(g: Gradyan): Float32Array[] {
   return liste;
 }
 
-function modelDizileri(m: Model): Float32Array[] {
-  const liste: Float32Array[] = [m.E.veri, m.Wgiris.veri, m.bgiris];
-  for (const b of m.bloklar) liste.push(b.W1.veri, b.b1, b.W2.veri, b.b2);
-  liste.push(m.Wcikis.veri, m.bcikis);
-  return liste;
-}
-
 /**
  * Gradyan inişinin tek adımı:  ağırlık <- ağırlık - öğrenmeOranı * gradyan
  *
@@ -259,7 +253,7 @@ export function gradyanUygula(
   if (kirpma > 0 && norm > kirpma) katsayi *= kirpma / norm;
 
   const gDizi = gradyanDizileri(grad);
-  const mDizi = modelDizileri(model);
+  const mDizi = agirlikDizileri(model);
   for (let d = 0; d < mDizi.length; d++) {
     const hedef = mDizi[d];
     const kaynak = gDizi[d];

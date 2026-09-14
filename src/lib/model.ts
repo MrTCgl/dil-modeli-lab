@@ -359,3 +359,40 @@ export function uret(
   }
   return uretilen;
 }
+
+// ---------------------------------------------------------------------------
+// Ağırlıkların taşınması
+// ---------------------------------------------------------------------------
+
+/**
+ * Modelin bütün ağırlıklarını sabit bir sırayla düz diziler hâlinde verir.
+ *
+ * Buna eğitim Web Worker'ı için ihtiyaç var: eğitim ayrı bir iş parçacığında
+ * dönüyor, ekran ise ana iş parçacığında. İkisi aynı nesneyi paylaşamaz
+ * (SharedArrayBuffer güvenlik başlıkları istiyor, statik barındırmada yok),
+ * bu yüzden worker belirli aralıklarla ağırlıkların bir kopyasını gönderiyor.
+ * 7.376 sayı ~30 KB eder; saniyede on beş kez göndermek bile hiçbir şeydir.
+ *
+ * Sıra iki taraf için de aynı olmak zorunda — bu yüzden tek bir yerde
+ * tanımlı ve hem worker hem ekran bu fonksiyonu kullanıyor.
+ */
+export function agirlikDizileri(model: Model): Float32Array[] {
+  const liste: Float32Array[] = [model.E.veri, model.Wgiris.veri, model.bgiris];
+  for (const b of model.bloklar) liste.push(b.W1.veri, b.b1, b.W2.veri, b.b2);
+  liste.push(model.Wcikis.veri, model.bcikis);
+  return liste;
+}
+
+/** Gelen ağırlık kopyalarını modelin üzerine yazar. */
+export function agirliklariYaz(model: Model, gelen: Float32Array[]): void {
+  const hedefler = agirlikDizileri(model);
+  if (hedefler.length !== gelen.length) return;
+  for (let i = 0; i < hedefler.length; i++) {
+    if (hedefler[i].length === gelen[i].length) hedefler[i].set(gelen[i]);
+  }
+}
+
+/** Worker'a göndermek için ağırlıkların kopyası. */
+export function agirlikKopyasi(model: Model): Float32Array[] {
+  return agirlikDizileri(model).map((d) => new Float32Array(d));
+}

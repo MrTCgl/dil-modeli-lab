@@ -65,7 +65,10 @@ export default function IleriGecisEkrani() {
   const [asamaIndeks, setAsamaIndeks] = useState(0);
   const [altAdim, setAltAdim] = useState(0);
   const [oynatiliyor, setOynatiliyor] = useState(false);
-  const [hiz, setHiz] = useState(24);
+  // Animasyon hızı ortak durumda: eğitim panelindeki kaydıraçla aynı değer,
+  // ve adres çubuğuyla paylaşılabiliyor.
+  const hiz = durum.hiz;
+  const setHiz = (v: number) => setDurum((d) => ({ ...d, hiz: v }));
 
   const asamaRef = useRef(0);
   const altRef = useRef(0);

@@ -16,7 +16,7 @@
 
 import { useMemo, useRef, useState } from "react";
 import { type Matris, type Model, modelOlustur, parametreSayisi } from "../lib/model.ts";
-import { gorunurAd } from "../lib/tokenizer.ts";
+import { izgaralariTopla } from "../lib/izgaralar.ts";
 import { adet } from "../lib/bicim.ts";
 import { AgirlikIzgarasi } from "./AgirlikIzgarasi.tsx";
 import { TahminSeridi } from "./TahminSeridi.tsx";
@@ -46,7 +46,7 @@ export default function IzgaraPaneli() {
     bozmalarRef.current = new Map();
   }
 
-  const matrisler = useMemo(() => toplaMatrisler(model), [model]);
+  const matrisler = useMemo(() => izgaralariTopla(model), [model]);
 
   const degistir = (matris: Matris, indeks: number, deger: number) => {
     const anahtar = `${matris.ad}#${indeks}`;
@@ -126,63 +126,4 @@ export default function IzgaraPaneli() {
       ))}
     </div>
   );
-}
-
-interface IzgaraTanimi {
-  matris: Matris;
-  aciklama: string;
-  satirEtiketi?: (i: number) => string | null;
-  sutunEtiketi?: (j: number) => string | null;
-}
-
-/** Sayısal eksen etiketi: her hücreye yazmak kalabalık eder, seyreltiyoruz. */
-function seyrek(aralik: number) {
-  return (i: number) => (i % aralik === 0 ? String(i) : null);
-}
-
-function toplaMatrisler(model: Model): IzgaraTanimi[] {
-  const D = model.ayar.D;
-  const C = model.ayar.baglam;
-
-  const liste: IzgaraTanimi[] = [
-    {
-      matris: model.E,
-      aciklama:
-        "Gömme tablosu. Her satır bir karakterin vektörü. Bir satırı bozmak o harfin modeldeki anlamını bozar.",
-      satirEtiketi: (i) => gorunurAd(i),
-      sutunEtiketi: seyrek(4),
-    },
-    {
-      matris: model.Wgiris,
-      aciklama:
-        "Giriş projeksiyonu. Bağlamdaki 8 gömme uç uca eklenir (8×16=128 sayı) ve buradan tek bir 16'lık vektöre iner. Satır etiketleri hangi pozisyona ait olduğunu gösterir: t−1 en son karakter.",
-      satirEtiketi: (i) => (i % D === 0 ? `t−${C - Math.floor(i / D)}` : null),
-      sutunEtiketi: seyrek(4),
-    },
-  ];
-
-  model.bloklar.forEach((blok) => {
-    liste.push({
-      matris: blok.W1,
-      aciklama: "Bloğun genişleyen katmanı: 16 sayı 64'e açılır, ardından ReLU negatifleri siler.",
-      satirEtiketi: seyrek(4),
-      sutunEtiketi: seyrek(8),
-    });
-    liste.push({
-      matris: blok.W2,
-      aciklama: "Bloğun daralan katmanı: 64 sayı 16'ya iner ve ana yola eklenir (artık bağlantı).",
-      satirEtiketi: seyrek(8),
-      sutunEtiketi: seyrek(4),
-    });
-  });
-
-  liste.push({
-    matris: model.Wcikis,
-    aciklama:
-      "Çıkış katmanı. Her sütun bir karaktere ait: o karakterin skoru bu sütunla çarpımdan çıkar. Bir sütunu yukarı çekmek o harfi modele sevdirir.",
-    satirEtiketi: seyrek(4),
-    sutunEtiketi: (j) => gorunurAd(j),
-  });
-
-  return liste;
 }

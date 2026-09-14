@@ -1,0 +1,36 @@
+---
+import Temel from "../layouts/Temel.astro";
+import EgitimEkrani from "../components/EgitimEkrani.tsx";
+---
+
+<Temel
+  baslik="Eğitim paneli — dil modeli laboratuvarı"
+  aciklama="Modeli tarayıcıda eğitin; kayıp eğrisi, gömme küresi ve bütün ağırlıklar aynı anda güncellensin."
+>
+  <main class="mx-auto max-w-[1100px] px-4 py-8 sm:px-6">
+    <header class="mb-6 max-w-[62ch]">
+      <h1 class="mb-3 text-[22px] font-medium tracking-tight text-metin">
+        Öğrenmenin kendisi
+      </h1>
+      <p class="text-[14px] leading-relaxed text-soluk">
+        Eğit düğmesine basın. Model, içine gömülü Türkçe metni okuyarak bir sonraki karakteri
+        tahmin etmeyi öğrenmeye çalışacak. Kayıp eğrisi düşerken gömme küresindeki noktalar yer
+        değiştirecek, ağırlık ızgaralarındaki hücreler parlayacak ve ürettiği metin yavaş yavaş
+        Türkçeye benzemeye başlayacak.
+      </p>
+      <p class="mt-3 text-[13px] leading-relaxed text-cok-soluk">
+        Eğitim ayrı bir iş parçacığında dönüyor: sayfa donmaz, eğitim sürerken küreyi
+        döndürebilir, kaydıraçları oynatabilirsiniz.
+      </p>
+    </header>
+
+    <EgitimEkrani client:only="react" />
+
+    <footer class="mt-10 border-t border-cizgi pt-4 text-[11px] leading-relaxed text-cok-soluk">
+      <p>
+        Gradyanlar elle yazıldı, autograd kütüphanesi yok. Eğitim döngüsünü okumak isteyen için:
+        <span class="sayi">src/lib/train.ts</span> ve <span class="sayi">src/workers/egitim.ts</span>.
+      </p>
+    </footer>
+  </main>
+</Temel>

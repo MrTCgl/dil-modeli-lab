@@ -39,6 +39,29 @@ const SOL_MARJ = 40;
 const UST_MARJ = 20;
 const ETIKET_ESIGI = 9; // bu boyutun altında etiket çizilmez, okunmuyor
 const PARLAMA_SURESI = 700; // ms
+/**
+ * Parlama döngüsü saniyede en fazla bu kadar kez yeniden çizer.
+ *
+ * Neden sınır var: eğitim sürerken matristeki her hücre her güncellemede
+ * değişiyor, yani parlama hiç bitmiyor ve döngü 60 fps'te dönüyordu. Yedi
+ * ızgaranın tuvali saniyede altmış kez yeniden boyanınca tarayıcının
+ * birleştiricisi tıkanıyor ve sayfa — hesap worker'da olmasına rağmen —
+ * takılıyordu. Ölçüm: kareler arası süre 16,7 ms'ten 70 ms'e çıkıyordu.
+ * Gözün ayırt edemeyeceği bir tazeleme hızı için ödenecek bedel değil.
+ */
+const PARLAMA_ARALIGI = 50; // ms (~20 fps)
+/**
+ * Parlama eşiği: o güncellemedeki en büyük değişimin bu oranını aşan
+ * hücreler parlar.
+ *
+ * Neden sabit bir sayı değil: eğitimde her hücre her adımda bir miktar
+ * oynuyor, ama ne kadar oynadığı öğrenme oranına, adım sayısına ve eğitimin
+ * hangi aşamasında olduğuna göre kat kat değişiyor. Sabit eşik ya hiçbir
+ * şeyi ya her şeyi parlatıyordu. Orana bağlayınca soru "çok mu değişti"den
+ * "bu turda en çok değişenler hangileri"ye dönüyor — zaten sorulması
+ * gereken de bu.
+ */
+const PARLAMA_ORANI = 0.35;
 const YUKSEKLIK_BUTCESI = 420; // "sığdır" kipinde hedeflenen çizim yüksekliği
 
 export type BoyutKipi = "sigdir" | "orta" | "buyuk";
@@ -73,7 +96,12 @@ export function AgirlikIzgarasi({
   const oncekiRef = useRef<Float32Array | null>(null);
   const parlamaRef = useRef<Float64Array | null>(null);
   const cerceveRef = useRef<number | null>(null);
+  const zamanRef = useRef<number | null>(null);
 
+  // Ekranda görünmeyen ızgara çizilmez. Eğitim sayfasında yedi ızgara var ve
+  // çoğu katlamanın altında kalıyor; görünmeyen tuvalleri saniyede yirmi kez
+  // yeniden boyamak, kimsenin bakmadığı bir yere işlemci harcamak demek.
+  const [gorunur, setGorunur] = useState(true);
   const [kip, setKip] = useState<BoyutKipi>("sigdir");
   // Çok uzun ve dar matrisler varsayılan olarak devrik gösterilir.
   const [devrik, setDevrik] = useState(matris.satir > matris.sutun * 3);
@@ -82,6 +110,11 @@ export function AgirlikIzgarasi({
   const [secili, setSecili] = useState<number | null>(null);
   const [fare, setFare] = useState<{ x: number; y: number } | null>(null);
 
+  // Not: burada özeti seyrek hesaplamayı denedim (matrisin tamamını sıralamak
+  // gerekiyor), ama profil çıkarınca renk hesabının toplam CPU'nun binde
+  // beşi olduğu görüldü — darboğaz oradan değil, tuvallerin yeniden
+  // boyanmasındandı. Erken optimizasyonu geri aldım: başlıktaki en
+  // küçük/ortalama/en büyük değerleri her güncellemede doğru olsun.
   const ozet = useMemo(() => ozetCikar(matris.veri), [matris, surum]);
 
   // Ekranda görünen satır/sütun sayısı (devrik kipte yer değiştirir).
@@ -123,6 +156,17 @@ export function AgirlikIzgarasi({
   const bosluk = boyut >= 8 ? 1 : 0;
   const cizimGenislik = SOL_MARJ + gSutun * boyut;
   const cizimYukseklik = UST_MARJ + gSatir * boyut;
+
+  useEffect(() => {
+    const el = kapsayiciRef.current;
+    if (!el || typeof IntersectionObserver === "undefined") return;
+    const gozlemci = new IntersectionObserver(
+      (girdiler) => setGorunur(girdiler.some((g) => g.isIntersecting)),
+      { rootMargin: "150px" },
+    );
+    gozlemci.observe(el);
+    return () => gozlemci.disconnect();
+  }, []);
 
   // Kapsayıcı genişliğini izle: "sığdır" kipi buna göre hesaplanır.
   useEffect(() => {
@@ -226,7 +270,11 @@ export function AgirlikIzgarasi({
     }
 
     if (parlayanVar) {
-      cerceveRef.current = requestAnimationFrame(ciz);
+      // Sönme sürerken yeniden çiz — ama saniyede yirmi kereden fazla değil.
+      zamanRef.current = window.setTimeout(() => {
+        zamanRef.current = null;
+        cerceveRef.current = requestAnimationFrame(ciz);
+      }, PARLAMA_ARALIGI);
     } else {
       cerceveRef.current = null;
     }
@@ -234,6 +282,12 @@ export function AgirlikIzgarasi({
 
   // Değişen hücreleri tespit et, sonra çiz.
   useEffect(() => {
+    if (!gorunur) {
+      // Görünür alana geri dönünce her hücre "değişmiş" sayılıp topluca
+      // parlamasın diye karşılaştırma anlık görüntüsünü de bırakıyoruz.
+      oncekiRef.current = null;
+      return;
+    }
     if (parlamaAktif) {
       const onceki = oncekiRef.current;
       if (!parlamaRef.current || parlamaRef.current.length !== matris.veri.length) {
@@ -242,19 +296,30 @@ export function AgirlikIzgarasi({
       if (onceki && onceki.length === matris.veri.length) {
         const simdi = performance.now();
         const parlama = parlamaRef.current;
+        let enBuyukFark = 0;
         for (let i = 0; i < matris.veri.length; i++) {
-          if (onceki[i] !== matris.veri[i]) parlama[i] = simdi;
+          const fark = Math.abs(onceki[i] - matris.veri[i]);
+          if (fark > enBuyukFark) enBuyukFark = fark;
+        }
+        if (enBuyukFark > 0) {
+          const esik = enBuyukFark * PARLAMA_ORANI;
+          for (let i = 0; i < matris.veri.length; i++) {
+            if (Math.abs(onceki[i] - matris.veri[i]) >= esik) parlama[i] = simdi;
+          }
         }
       }
       oncekiRef.current = new Float32Array(matris.veri);
     }
     if (cerceveRef.current != null) cancelAnimationFrame(cerceveRef.current);
+    if (zamanRef.current != null) clearTimeout(zamanRef.current);
     cerceveRef.current = requestAnimationFrame(ciz);
     return () => {
       if (cerceveRef.current != null) cancelAnimationFrame(cerceveRef.current);
+      if (zamanRef.current != null) clearTimeout(zamanRef.current);
       cerceveRef.current = null;
+      zamanRef.current = null;
     };
-  }, [ciz, surum, parlamaAktif, matris]);
+  }, [ciz, surum, parlamaAktif, matris, gorunur]);
 
   // --- Etkileşim -----------------------------------------------------------
   const indeksBul = useCallback(

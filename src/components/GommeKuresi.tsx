@@ -89,6 +89,7 @@ export function GommeKuresi({ model, surum, yukseklik = 460 }: GommeKuresiProps)
   } | null>(null);
 
   const oncekiBilesenler = useRef<Float64Array[] | undefined>(undefined);
+  const gorunurRef = useRef<() => boolean>(() => true);
   const seciliRef = useRef<number[]>([]);
   seciliRef.current = secili;
 
@@ -178,6 +179,7 @@ export function GommeKuresi({ model, surum, yukseklik = 460 }: GommeKuresiProps)
       if (!durum) return;
       const hareket = durum.kontrol.update();
       if (!hareket && !durum.kirli) return;
+      if (!gorunurRef.current()) return;
 
       // Arkadaki noktalar soluklaşsın: kürenin ön-arka ayrımı böyle okunuyor.
       durum.kamera.getWorldPosition(kameraYonu).normalize();
@@ -218,6 +220,23 @@ export function GommeKuresi({ model, surum, yukseklik = 460 }: GommeKuresiProps)
     };
     raf = requestAnimationFrame(dongu);
 
+    // Küre ekranda değilken çizilmez: eğitim panelinde sayfa uzun ve küre
+    // rahatlıkla görüş alanının dışında kalabiliyor.
+    let gorunur = true;
+    const gorunurlukGozlemcisi =
+      typeof IntersectionObserver === "undefined"
+        ? null
+        : new IntersectionObserver(
+            (girdiler) => {
+              gorunur = girdiler.some((g) => g.isIntersecting);
+              const d = sahneRef.current;
+              if (gorunur && d) d.kirli = true;
+            },
+            { rootMargin: "120px" },
+          );
+    gorunurlukGozlemcisi?.observe(kap);
+    gorunurRef.current = () => gorunur;
+
     const gozlemci = new ResizeObserver(() => {
       const durum = sahneRef.current;
       if (!durum || !kapRef.current) return;
@@ -231,6 +250,7 @@ export function GommeKuresi({ model, surum, yukseklik = 460 }: GommeKuresiProps)
 
     return () => {
       cancelAnimationFrame(raf);
+      gorunurlukGozlemcisi?.disconnect();
       gozlemci.disconnect();
       kontrol.dispose();
       noktalar.forEach((n) => (n.material as THREE.Material).dispose());
