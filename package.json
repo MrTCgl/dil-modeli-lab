@@ -1,0 +1,14 @@
+{
+  "name": "dil-modeli-lab",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Tarayıcıda gerçekten eğitilen, karakter düzeyinde minik bir dil modelinin her sayısını görünür kılan öğretici laboratuvar.",
+  "license": "MIT",
+  "scripts": {
+    "cekirdek": "node --experimental-strip-types scripts/cekirdek.ts"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3"
+  }
+}
