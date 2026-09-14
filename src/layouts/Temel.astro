@@ -10,13 +10,14 @@ const { baslik, aciklama } = Astro.props;
 const yol = Astro.url.pathname;
 
 // Ekranlar modelin yaptığı işin sırasıyla dizilir: önce ağırlıklar (model
-// nedir), sonra ileri geçiş (model ne yapar). Sonraki adımlarda küre,
-// eğitim ve TTT buraya eklenecek.
+// nedir), sonra ileri geçiş (model ne yapar), gömme küresi (ne öğrendi),
+// eğitim (nasıl öğreniyor) ve TTT (okurken de öğrenebilir mi).
 const ekranlar = [
   { yol: "/", ad: "ağırlıklar" },
   { yol: "/ileri-gecis", ad: "ileri geçiş" },
   { yol: "/kure", ad: "gömme küresi" },
   { yol: "/egitim", ad: "eğitim" },
+  { yol: "/ttt", ad: "TTT modu" },
 ];
 ---
 

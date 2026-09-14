@@ -31,6 +31,7 @@ import {
 } from "../src/lib/train.ts";
 import { carpimKonumu, carpimSonucu } from "../src/lib/carpim.ts";
 import { aciDerece, birimleHale, izdusumCikar, kosinus } from "../src/lib/pca.ts";
+import { cikisFarki, hizliAgirlikAdimi, hizliParametreSayisi, modelKopyala } from "../src/lib/ttt.ts";
 import { EGITIM_METNI } from "../src/data/metin.ts";
 
 const cizgi = (baslik: string) => console.log(`\n${"─".repeat(64)}\n${baslik}\n${"─".repeat(64)}`);
@@ -327,5 +328,103 @@ cizgi("6. GÖMME KÜRESİ: PCA VE ÖĞRENİLEN YAPI");
     `\nörnek: a–e kosinüs ${say(kosinus(sonrakiBirimler[a], sonrakiBirimler[e]))} (${aciDerece(kosinus(sonrakiBirimler[a], sonrakiBirimler[e])).toFixed(1)}°) · ` +
       `a–k ${say(kosinus(sonrakiBirimler[a], sonrakiBirimler[k]))} (${aciDerece(kosinus(sonrakiBirimler[a], sonrakiBirimler[k])).toFixed(1)}°)`,
   );
+}
+console.log();
+
+// ---------------------------------------------------------------------------
+cizgi("7. TTT: ÇIKARIM ANINDA ÖĞRENMEK KAZANDIRIYOR MU?");
+
+/**
+ * İki kopya, aynı metin. Solda hiçbir şey değişmiyor; sağda her karakterden
+ * sonra sadece son projeksiyon matrisi bir adım güncelleniyor. Ölçtüğümüz
+ * şey baştan beri ortalama kayıp.
+ *
+ * Bu ölçümün dürüst olması için sonucu peşinen varsaymıyoruz: kazanç metne
+ * ve öğrenme oranına bağlı, ikisini de değiştirip çıkan sayıyı yazıyoruz.
+ */
+{
+  const hizli = hizliParametreSayisi(model);
+  const toplam = parametreSayisi(model);
+  console.log(
+    `çıkarım sırasında güncellenen parametre: ${hizli} / ${toplam} = ${((100 * hizli) / toplam).toFixed(1)}%`,
+  );
+
+  const PARCA =
+    "okyanusun ortasında bir fener durur. fenerin bekçisi her gece lambayı yakar, sabaha kadar bekler. deniz karardıkça ışık uzaklara gider. ";
+
+  function kosu(metin: string, oran: number): { donuk: number; hizli: number; surukleme: number } {
+    const ids = encode(metin);
+    const donukModel = modelKopyala(model);
+    const hizliModel = modelKopyala(model);
+    const C = model.ayar.baglam;
+    let dToplam = 0;
+    let hToplam = 0;
+    let sayi = 0;
+    for (let t = 0; t + 1 < ids.length; t++) {
+      const baglam = ids.slice(Math.max(0, t + 1 - C), t + 1);
+      const hedef = ids[t + 1];
+      const izD = ileriGecis(donukModel, baglam, 1);
+      const izH = ileriGecis(hizliModel, baglam, 1);
+      dToplam += kayip(izD.olasilik, hedef);
+      hToplam += kayip(izH.olasilik, hedef);
+      sayi++;
+      hizliAgirlikAdimi(hizliModel, izH, hedef, oran);
+    }
+    return {
+      donuk: dToplam / sayi,
+      hizli: hToplam / sayi,
+      surukleme: cikisFarki(hizliModel, donukModel),
+    };
+  }
+
+  const sinamalar: Array<[string, string]> = [
+    ["tekrar eden yeni metin (4 tur)", PARCA.repeat(4)],
+    ["aynı metin, tek tur", PARCA],
+    ["eğitim metninden bir parça", EGITIM_METNI.slice(2000, 2600)],
+  ];
+
+  for (const oran of [0.02, 0.06, 0.15]) {
+    console.log(`\nhızlı ağırlık öğrenme oranı ${oran}`);
+    console.log("  metin                            donmuş    hızlı     fark   sürükleme");
+    for (const [ad, metin] of sinamalar) {
+      const r = kosu(metin, oran);
+      const fark = r.donuk - r.hizli;
+      const isaret = fark > 0.0005 ? "kazandı" : fark < -0.0005 ? "kaybetti" : "eşit";
+      console.log(
+        `  ${ad.padEnd(32)}${say(r.donuk)}  ${say(r.hizli)}  ${say(fark)}  ${r.surukleme.toFixed(3).padStart(7)}  ${isaret}`,
+      );
+    }
+  }
+
+  // Tekrar eden metinde tur tur bakalım: TTT okudukça iyileşiyorsa her tur
+  // bir öncekinden daha iyi olmalı.
+  console.log("\ntekrar eden metinde tur tur ortalama kayıp (öğrenme oranı 0.06):");
+  {
+    const ids = encode(PARCA.repeat(4));
+    const donukModel = modelKopyala(model);
+    const hizliModel = modelKopyala(model);
+    const C = model.ayar.baglam;
+    const turUzunlugu = Math.floor(ids.length / 4);
+    const turD = [0, 0, 0, 0];
+    const turH = [0, 0, 0, 0];
+    const turN = [0, 0, 0, 0];
+    for (let t = 0; t + 1 < ids.length; t++) {
+      const tur = Math.min(3, Math.floor(t / turUzunlugu));
+      const baglam = ids.slice(Math.max(0, t + 1 - C), t + 1);
+      const hedef = ids[t + 1];
+      const izD = ileriGecis(donukModel, baglam, 1);
+      const izH = ileriGecis(hizliModel, baglam, 1);
+      turD[tur] += kayip(izD.olasilik, hedef);
+      turH[tur] += kayip(izH.olasilik, hedef);
+      turN[tur]++;
+      hizliAgirlikAdimi(hizliModel, izH, hedef, 0.06);
+    }
+    console.log("  tur   donmuş    hızlı     fark");
+    for (let i = 0; i < 4; i++) {
+      console.log(
+        `  ${i + 1}.  ${say(turD[i] / turN[i])}  ${say(turH[i] / turN[i])}  ${say(turD[i] / turN[i] - turH[i] / turN[i])}`,
+      );
+    }
+  }
 }
 console.log();

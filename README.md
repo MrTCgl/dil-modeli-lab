@@ -24,12 +24,11 @@ Ağır iş Web Worker içinde çalışır, arayüz donmaz.
 
 ## Ekranlar
 
-1. **Gömme küresi** — normalize edilmiş gömme vektörleri 3B kürede; eğitim ilerledikçe canlı yer değiştirir (D > 3 olduğunda PCA izdüşümü)
-2. **Ağırlık ızgaraları** — her matris bir ısı haritası; hücreler elle değiştirilebilir, çıktının bozulması anında görülür
-3. **İleri geçiş** — token id → gömme → matris çarpımı (hücre hücre) → ReLU → artık bağlantı → logits → softmax
-4. **Üretim** — tahmin edilen karakter cümleye eklenerek döngü sürer
-5. **Eğitim paneli** — canlı kayıp eğrisi, eşzamanlı güncellenen küre ve ızgaralar
-6. **TTT modu** — donmuş ağırlıklar ile çıkarım anında güncellenen fast weight karşılaştırması
+1. **Ağırlıklar** (`/`) — modelin yedi matrisi de ısı haritası olarak. Her hücreye tıklayıp elle değiştirebilirsiniz; üstteki tahmin anında bozulur. Uzun ve dar matrisler okunur kalsın diye devrik gösterilir.
+2. **İleri geçiş** (`/ileri-gecis`) — bir tahmine giden 13 aşama tek tek. Matris çarpımı hücre hücre canlandırılır: hangi giriş hangi ağırlıkla çarpılıyor, ara toplam nereye gidiyor.
+3. **Gömme küresi** (`/kure`) — her karakter küre üzerinde bir nokta, benzerlik aradaki açı. İki nokta seçince gerçek 16 boyutlu kosinüs benzerliği ve küredeki görünen açı yan yana yazılır.
+4. **Eğitim** (`/egitim`) — Web Worker'da eğitim, canlı kayıp eğrisi, bütün kaydıraçlar, eşzamanlı güncellenen küre ve ızgaralar, üretim paneli.
+5. **TTT modu** (`/ttt`) — donmuş model ile çıkarım anında son projeksiyon matrisini güncelleyen modelin aynı metin üzerindeki karşılaştırması.
 
 ## Teknik
 
@@ -48,9 +47,26 @@ src/components/       — Sphere, WeightGrid, ForwardPass, TrainPanel, TTTCompar
 
 `model.ts` ve `train.ts` bol yorumlu; matematiği açıkça yazar. Bu dosyalar uygulamanın kendisi kadar öğretici olmalı.
 
-## Durum
+## Çalıştırma
 
-Kurulum aşamasında. Sıra: çekirdek (tokenizer, model, train) → ağırlık ızgarası → ileri geçiş → küre → eğitim paneli → TTT modu.
+```
+npm install
+npm run dev        # geliştirme sunucusu
+npm run build      # statik build
+npm run cekirdek   # arayüzsüz doğrulama betiği
+npm run kontrol    # astro check + tsc
+```
+
+## Doğrulama
+
+`npm run cekirdek` arayüze hiç dokunmadan şunları ölçer ve yazdırır:
+
+- **Gradyanlar doğru mu?** Elle yazılan her türev merkezi sayısal türevle karşılaştırılır. En kötü bağıl fark ~9e-6.
+- **Eğitim öğreniyor mu?** 3000 adımda kayıp 3.25'ten 1.58'e iner (rastgele modelin kaybı ln(32) = 3.47).
+- **Çarpım animasyonu modelle aynı sayıyı mı üretiyor?** 208 çıkışın tamamı, Float32 yuvarlaması dahil, birebir aynı.
+- **PCA doğru mu?** Bileşenler birim uzunlukta ve dik (iç çarpımlar ~1e-13), izdüşüm iki çalıştırmada birebir aynı.
+- **Eğitim gerçekten yapı kuruyor mu?** Sesli-sesli ile sesli-sessiz ortalama benzerlik farkı eğitimden önce −0.062, sonra +0.203. Model sesli/sessiz ayrımını hiç görmedi, sadece metni okudu.
+- **TTT kazandırıyor mu?** Tekrar eden yeni bir metinde evet (ortalama kayıp 2.50 → 2.03); tek turluk ya da modelin zaten bildiği metinde hayır. Öğrenme oranı büyütüldükçe önce kazanç artar, sonra model kendini bozar.
 
 ## Lisans
 

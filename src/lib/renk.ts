@@ -82,3 +82,21 @@ export function ozetCikar(veri: Float32Array): Ozet {
     olcek: olcekBul(veri),
   };
 }
+
+/**
+ * Donmuş ağırlıklar için gri skala.
+ *
+ * TTT ekranında hangi matrislerin çıkarım anında güncellendiğini, hangi
+ * lerinin dondurulduğunu ayırmak gerekiyor. Buna yeni bir renk eklemek
+ * yerine rengi KALDIRIYORUZ: donmuş matrisler grileşiyor, güncellenen
+ * matris normal turkuaz-kehribar skalasında kalıyor. Böylece renk hâlâ
+ * tek bir şey anlatıyor — değerin işareti — ve "canlı olan renkli" sezgisi
+ * bedavaya geliyor.
+ */
+const donukSkala = interpolateLab(HUCRE_SIFIR, "#8d97a8");
+
+export function donukRenk(deger: number, olcek: number): string {
+  if (!(olcek > 0) || !Number.isFinite(deger)) return HUCRE_SIFIR;
+  const t = Math.sqrt(Math.min(1, Math.abs(deger) / olcek));
+  return donukSkala(t);
+}
