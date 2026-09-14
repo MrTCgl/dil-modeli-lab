@@ -38,6 +38,8 @@ export interface KayipEgrisiProps {
   dogrulama: DogrulamaNoktasi[];
   genislik: number;
   yukseklik?: number;
+  /** "Her konum tahmin etsin" kipinde eğitim kaybının anlamı değişiyor. */
+  tumKonumlar?: boolean;
 }
 
 /** Yürüyen ortalama: eğilimi gürültüden ayırır. */
@@ -67,7 +69,13 @@ function seyrelt<T>(veri: T[], enFazla: number): Array<[number, T]> {
 
 const KENAR = { ust: 12, sag: 12, alt: 26, sol: 42 };
 
-export function KayipEgrisi({ kayiplar, dogrulama, genislik, yukseklik = 230 }: KayipEgrisiProps) {
+export function KayipEgrisi({
+  kayiplar,
+  dogrulama,
+  genislik,
+  yukseklik = 230,
+  tumKonumlar = false,
+}: KayipEgrisiProps) {
   const cizimG = Math.max(120, genislik - KENAR.sol - KENAR.sag);
   const cizimY = yukseklik - KENAR.ust - KENAR.alt;
 
@@ -121,6 +129,14 @@ export function KayipEgrisi({ kayiplar, dogrulama, genislik, yukseklik = 230 }: 
           rastgele tahminin kaybı ln(32) = {sayi(RASTGELE_KAYIP, 4)}
         </span>
       </div>
+      {tumKonumlar && (
+        <p className="mb-2 text-[10px] leading-relaxed text-cok-soluk">
+          Eğitim kaybı sekiz konumun ortalaması. İlk konumlar yalnızca bir iki karakter gördüğü
+          için onların kaybı doğal olarak yüksek ve ortalamayı yukarı çekiyor. Doğrulama kaybı ise
+          her kipte aynı şeyi ölçer: tam bağlam görmüş son konumun başarısı. İki eğrinin arası
+          bu yüzden bu kipte daha dar görünüyor.
+        </p>
+      )}
 
       <svg width={genislik} height={yukseklik} role="img" aria-label="eğitim kaybı eğrisi">
         <g transform={`translate(${KENAR.sol},${KENAR.ust})`}>

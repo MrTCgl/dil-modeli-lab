@@ -17,6 +17,7 @@ Karakter düzeyinde, minik bir dil modeli:
 - **Gömme boyutu (D):** varsayılan 16, 4–64 arası ayarlanabilir
 - **Bağlam:** son 8 karakter
 - **Dikkat:** tek başlı nedensel öz-dikkat (açılıp kapatılabilir). Açıkken konumlar birbirine bakabilir; kapalıyken bağlam uç uca eklenip sabit bir projeksiyondan geçer.
+- **Eğitim kipi:** dikkat açıkken her konum kendi sonraki karakterini tahmin edebilir — tek ileri geçişten sekiz tahmin, sekiz ayrı gradyan.
 - **Katmanlar:** 1–4 MLP bloğu — `x → Linear(D, 4D) → ReLU → Linear(4D, D)` + artık bağlantı
 - **Çıkış:** `Linear(D, V)` → softmax
 
@@ -67,7 +68,8 @@ npm run kontrol    # astro check + tsc
 - **Çarpım animasyonu modelle aynı sayıyı mı üretiyor?** 208 çıkışın tamamı, Float32 yuvarlaması dahil, birebir aynı.
 - **PCA doğru mu?** Bileşenler birim uzunlukta ve dik (iç çarpımlar ~1e-13), izdüşüm iki çalıştırmada birebir aynı.
 - **Eğitim gerçekten yapı kuruyor mu?** Sesli-sesli ile sesli-sessiz ortalama benzerlik farkı eğitimden önce −0.062, sonra +0.203. Model sesli/sessiz ayrımını hiç görmedi, sadece metni okudu.
-- **Dikkat ne katıyor?** Aynı tohum ve ayarlarla: dikkatsiz modelin doğrulama kaybı 2.796, dikkatli modelinki 2.414 — üstelik dikkatli model 912 parametre daha küçük. Dikkat dağılımının ortalama entropisi eğitimle 2.078'den 1.628'e iniyor (düz dağılım ln(8) = 2.079), yani eğitim dikkati keskinleştiriyor.
+- **Dikkat ne katıyor?** Aynı tohum, aynı ayarlar, aynı eğitim kipiyle: dikkatsiz modelin doğrulama kaybı 2.475, dikkatli modelinki 2.400 — küçük ama tutarlı bir fark, üstelik dikkatli model 912 parametre daha az kullanıyor. Dikkat dağılımının ortalama entropisi eğitimle 2.078'den 1.649'a iniyor (düz dağılım ln(8) = 2.079), yani eğitim dikkati keskinleştiriyor.
+- **Her konum tahmin ederse?** Aynı adım sayısında doğrulama kaybı 0.050 daha iyi, ama bir adım 4.4 kat pahalı. Aynı sürede ölçünce fark (0.022) ölçümün kendi gürültüsünün (0.035) altında kalıyor: örnek başına daha verimli, hesap başına başabaş.
 - **TTT kazandırıyor mu?** Tekrar eden yeni bir metinde evet (ortalama kayıp 2.50 → 2.03); tek turluk ya da modelin zaten bildiği metinde hayır. Öğrenme oranı büyütüldükçe önce kazanç artar, sonra model kendini bozar.
 
 ## Lisans

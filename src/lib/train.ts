@@ -29,6 +29,7 @@
 import {
   type Blok,
   type IleriIz,
+  type KonumIzi,
   type Matris,
   type Model,
   agirlikDizileri,
@@ -132,17 +133,102 @@ export function gradyanSifirla(g: Gradyan): void {
  */
 export function geriYayilim(model: Model, iz: IleriIz, hedef: number, grad: Gradyan): void {
   const D = model.ayar.D;
+  const dh0 = konumGeriYayilim(
+    model,
+    { h0: iz.h0, bloklar: iz.bloklar, logits: iz.logits, olasilik: iz.olasilik },
+    hedef,
+    iz.sicaklik,
+    grad,
+  );
+
+  if (model.dikkat && iz.dikkat && grad.dikkat && model.P && grad.P) {
+    // Tek hedef var: gradyan yalnızca son konumdan giriyor, kalan konumların
+    // zincir gradyanı sıfır.
+    const C = iz.baglamIds.length;
+    const dYler: Float32Array[] = [];
+    for (let t = 0; t < C; t++) dYler.push(t === C - 1 ? dh0 : new Float32Array(D));
+    dikkatGeriYayilim(model, iz, grad, dYler, D);
+    return;
+  }
+
+  girisGeriYayilim(model, iz, grad, dh0, D);
+}
+
+/**
+ * HER KONUM TAHMİN EDERSE
+ * =======================
+ *
+ * Tek bir ileri geçişte bağlamdaki her konum kendi sonraki karakterini
+ * tahmin eder ve her biri kendi kaybını üretir. Gradyan sekiz ayrı yerden
+ * birden akar; aynı hesabın karşılığında modele sekiz kat fazla sinyal
+ * gelir.
+ *
+ * Bu, dikkatli mimarinin yapısal getirisi: dikkatsiz kurulumda bağlam tek
+ * bir vektöre indiği için "konumlar" diye bir şey kalmıyor, sekiz tahmin
+ * için sekiz ayrı ileri geçiş gerekiyor.
+ *
+ * Bedava değil: MLP blokları ve çıkış katmanı her konum için ayrı ayrı
+ * çalıştığından bir adım yaklaşık C kat daha pahalı. Kazanç adım başına
+ * değil, hesap başına ölçülmeli — konsol betiği ikisini de yazıyor.
+ *
+ * Erken konumlar az bağlam görür (ilk konum yalnızca kendini görür), bu
+ * yüzden onların kaybı doğal olarak yüksektir ve ortalamayı yukarı çeker.
+ * Gizlemiyoruz: kayıp eğrisindeki sayı bu ortalamanın kendisi.
+ */
+export function geriYayilimTumKonumlar(
+  model: Model,
+  iz: IleriIz,
+  hedefler: number[],
+  grad: Gradyan,
+): number {
+  const D = model.ayar.D;
+  if (!iz.konumlar || !model.dikkat || !iz.dikkat || !grad.dikkat || !model.P || !grad.P) {
+    // Dikkat kapalıyken bu kip mümkün değil; tek konumluk yola düşüyoruz.
+    geriYayilim(model, iz, hedefler[hedefler.length - 1], grad);
+    return kayip(iz.olasilik, hedefler[hedefler.length - 1]);
+  }
+
+  const C = iz.baglamIds.length;
+  const dYler: Float32Array[] = [];
+  let toplamKayip = 0;
+  // Her konumun kaybını C'ye bölüyoruz: ortalama alınmış olsun, yoksa
+  // gradyanın büyüklüğü bağlam uzunluğuna göre değişirdi.
+  const olcek = 1 / C;
+  for (let t = 0; t < C; t++) {
+    const konum = iz.konumlar[t];
+    toplamKayip += kayip(konum.olasilik, hedefler[t]);
+    dYler.push(konumGeriYayilim(model, konum, hedefler[t], iz.sicaklik, grad, olcek));
+  }
+  dikkatGeriYayilim(model, iz, grad, dYler, D);
+  return toplamKayip / C;
+}
+
+/**
+ * Bir konumun çıkış katmanı ve MLP bloklarından geri yayılım.
+ * Zincire giren vektörün (dikkat çıkışının) gradyanını döndürür.
+ *
+ * `olcek` birden çok konumun katkısını ortalamak için kullanılır.
+ */
+function konumGeriYayilim(
+  model: Model,
+  konum: KonumIzi,
+  hedef: number,
+  sicaklik: number,
+  grad: Gradyan,
+  olcek = 1,
+): Float32Array {
+  const D = model.ayar.D;
 
   // --- Çıkış: dL/dlogits = olasılık - birSıcak(hedef) -----------------------
   // Sıcaklık logits'i böldüğü için türevi de bölünür. Eğitimde sıcaklık 1'dir,
   // ama formülü eksiksiz yazıyoruz ki başka sıcaklıkta da doğru kalsın.
-  const V = iz.logits.length;
+  const V = konum.logits.length;
   const dlogits = new Float32Array(V);
-  for (let j = 0; j < V; j++) dlogits[j] = iz.olasilik[j] / iz.sicaklik;
-  dlogits[hedef] -= 1 / iz.sicaklik;
+  for (let j = 0; j < V; j++) dlogits[j] = (konum.olasilik[j] * olcek) / sicaklik;
+  dlogits[hedef] -= olcek / sicaklik;
 
   // Çıkış katmanının girdisi: son bloğun çıktısı (blok yoksa h0).
-  const sonH = iz.bloklar.length > 0 ? iz.bloklar[iz.bloklar.length - 1].cikti : iz.h0;
+  const sonH = konum.bloklar.length > 0 ? konum.bloklar[konum.bloklar.length - 1].cikti : konum.h0;
 
   const dh = new Float32Array(D);
   for (let i = 0; i < D; i++) {
@@ -162,7 +248,7 @@ export function geriYayilim(model: Model, iz: IleriIz, hedef: number, grad: Grad
   for (let l = model.bloklar.length - 1; l >= 0; l--) {
     const blok = model.bloklar[l];
     const gb = grad.bloklar[l];
-    const bi = iz.bloklar[l];
+    const bi = konum.bloklar[l];
     const genis = blok.W1.sutun; // 4D
 
     // cikti = girdi + dal  ->  gradyan iki yola da aynen geçer.
@@ -208,12 +294,17 @@ export function geriYayilim(model: Model, iz: IleriIz, hedef: number, grad: Grad
     dCikti = dGirdi;
   }
 
-  if (model.dikkat && iz.dikkat && grad.dikkat && model.P && grad.P) {
-    dikkatGeriYayilim(model, iz, grad, dCikti, D);
-    return;
-  }
+  return dCikti;
+}
 
-  // --- Giriş projeksiyonu: h0 = birlesik @ Wgiris + bgiris -----------------
+/** Dikkatsiz kurulumun giriş projeksiyonu ve gömmeleri. */
+function girisGeriYayilim(
+  model: Model,
+  iz: IleriIz,
+  grad: Gradyan,
+  dCikti: Float32Array,
+  D: number,
+): void {
   if (!model.Wgiris || !model.bgiris || !grad.Wgiris || !grad.bgiris || !iz.birlesik) return;
   const CD = model.Wgiris.satir;
   const dBirlesik = new Float32Array(CD);
@@ -229,7 +320,6 @@ export function geriYayilim(model: Model, iz: IleriIz, hedef: number, grad: Grad
   }
   for (let j = 0; j < D; j++) grad.bgiris[j] += dCikti[j];
 
-  // --- Gömmeler ------------------------------------------------------------
   // Birleştirilmiş vektörün gradyanını parçalayıp ilgili karakterin satırına
   // dağıtırız. Aynı karakter bağlamda birden çok kez geçiyorsa katkılar
   // toplanır — bu yüzden += kullanıyoruz.
@@ -263,17 +353,18 @@ export function geriYayilim(model: Model, iz: IleriIz, hedef: number, grad: Grad
  * Sezgisi: bir ağırlığı artırmak zorunlu olarak diğerlerini azaltır
  * (toplamları 1 olmak zorunda), o yüzden her terimden ortalama çıkarılıyor.
  *
- * NEDEN SADECE SON SATIR
- * Dikkat haritasının bütün satırları ileri geçişte hesaplanıyor ama tahmini
- * yalnızca son satır üretiyor; kalanı ekranda göstermek için. Dolayısıyla
- * sorgu gradyanı yalnızca son konuma gidiyor. Anahtar ve değer gradyanları
- * ise bütün konumlara ulaşıyor, çünkü son satır hepsine bakıyor.
+ * HANGİ SATIRLARDAN
+ * Gradyan, zincirinden kayıp gelen her konumdan giriyor. Tek hedefli kipte
+ * bu yalnızca son konum; "her konum tahmin etsin" kipinde sekizi birden.
+ * İkinci durumda dikkat haritasının her satırı kendi softmax'ıyla geri
+ * yayılıyor ve sorgular da öğreniyor — birinci durumda yalnızca son satırın
+ * sorgusu gradyan görüyordu.
  */
 function dikkatGeriYayilim(
   model: Model,
   iz: IleriIz,
   grad: Gradyan,
-  dY: Float32Array,
+  dYler: Float32Array[],
   D: number,
 ): void {
   const d = model.dikkat!;
@@ -281,73 +372,82 @@ function dikkatGeriYayilim(
   const gP = grad.P!;
   const di = iz.dikkat!;
   const C = iz.baglamIds.length;
-  const T = C - 1;
   const olcek = 1 / Math.sqrt(D);
 
   const dx: Float32Array[] = [];
-  for (let t = 0; t < C; t++) dx.push(new Float32Array(D));
-
-  // y_T = x_T + o_T
-  for (let i = 0; i < D; i++) dx[T][i] += dY[i];
-
-  // o_T = c_T @ Wo
-  const dKarisim = new Float32Array(D);
-  for (let i = 0; i < D; i++) {
-    const satir = i * D;
-    const ci = di.karisim[T][i];
-    let toplam = 0;
-    for (let j = 0; j < D; j++) {
-      gd.Wo.veri[satir + j] += ci * dY[j];
-      toplam += d.Wo.veri[satir + j] * dY[j];
-    }
-    dKarisim[i] = toplam;
-  }
-
-  // c_T = toplam_s a[s] * v_s
-  const dAgirlik = new Float32Array(C);
   const dDeger: Float32Array[] = [];
-  for (let t = 0; t < C; t++) dDeger.push(new Float32Array(D));
-  for (let sVal = 0; sVal <= T; sVal++) {
-    let ic = 0;
-    const a = di.agirliklar[T][sVal];
-    for (let i = 0; i < D; i++) {
-      ic += dKarisim[i] * di.deger[sVal][i];
-      dDeger[sVal][i] += a * dKarisim[i];
-    }
-    dAgirlik[sVal] = ic;
-  }
-
-  // softmax
-  let ortalama = 0;
-  for (let sVal = 0; sVal <= T; sVal++) ortalama += di.agirliklar[T][sVal] * dAgirlik[sVal];
-  const dSkor = new Float32Array(C);
-  for (let sVal = 0; sVal <= T; sVal++) {
-    dSkor[sVal] = di.agirliklar[T][sVal] * (dAgirlik[sVal] - ortalama);
-  }
-
-  // skor[s] = (q_T · k_s) * olcek
-  const dSorgu = new Float32Array(D);
   const dAnahtar: Float32Array[] = [];
-  for (let t = 0; t < C; t++) dAnahtar.push(new Float32Array(D));
-  for (let sVal = 0; sVal <= T; sVal++) {
-    const g = dSkor[sVal] * olcek;
-    if (g === 0) continue;
-    for (let i = 0; i < D; i++) {
-      dSorgu[i] += g * di.anahtar[sVal][i];
-      dAnahtar[sVal][i] += g * di.sorgu[T][i];
-    }
+  for (let t = 0; t < C; t++) {
+    dx.push(new Float32Array(D));
+    dDeger.push(new Float32Array(D));
+    dAnahtar.push(new Float32Array(D));
   }
 
-  // q_T = x_T @ Wq
-  for (let i = 0; i < D; i++) {
-    const satir = i * D;
-    const xi = di.x[T][i];
-    let toplam = 0;
-    for (let j = 0; j < D; j++) {
-      gd.Wq.veri[satir + j] += xi * dSorgu[j];
-      toplam += d.Wq.veri[satir + j] * dSorgu[j];
+  // Her satır (her sorgulayan konum) ayrı ayrı geri yayılır.
+  for (let T = 0; T < C; T++) {
+    const dY = dYler[T];
+    let sifir = true;
+    for (let i = 0; i < D; i++) if (dY[i] !== 0) { sifir = false; break; }
+    if (sifir) continue;
+
+    // y_T = x_T + o_T
+    for (let i = 0; i < D; i++) dx[T][i] += dY[i];
+
+    // o_T = c_T @ Wo
+    const dKarisim = new Float32Array(D);
+    for (let i = 0; i < D; i++) {
+      const satir = i * D;
+      const ci = di.karisim[T][i];
+      let toplam = 0;
+      for (let j = 0; j < D; j++) {
+        gd.Wo.veri[satir + j] += ci * dY[j];
+        toplam += d.Wo.veri[satir + j] * dY[j];
+      }
+      dKarisim[i] = toplam;
     }
-    dx[T][i] += toplam;
+
+    // c_T = toplam_s a[s] * v_s
+    const dAgirlik = new Float32Array(C);
+    for (let sVal = 0; sVal <= T; sVal++) {
+      let ic = 0;
+      const a = di.agirliklar[T][sVal];
+      for (let i = 0; i < D; i++) {
+        ic += dKarisim[i] * di.deger[sVal][i];
+        dDeger[sVal][i] += a * dKarisim[i];
+      }
+      dAgirlik[sVal] = ic;
+    }
+
+    // softmax
+    let ortalama = 0;
+    for (let sVal = 0; sVal <= T; sVal++) ortalama += di.agirliklar[T][sVal] * dAgirlik[sVal];
+    const dSkor = new Float32Array(C);
+    for (let sVal = 0; sVal <= T; sVal++) {
+      dSkor[sVal] = di.agirliklar[T][sVal] * (dAgirlik[sVal] - ortalama);
+    }
+
+    // skor[s] = (q_T · k_s) * olcek
+    const dSorgu = new Float32Array(D);
+    for (let sVal = 0; sVal <= T; sVal++) {
+      const g = dSkor[sVal] * olcek;
+      if (g === 0) continue;
+      for (let i = 0; i < D; i++) {
+        dSorgu[i] += g * di.anahtar[sVal][i];
+        dAnahtar[sVal][i] += g * di.sorgu[T][i];
+      }
+    }
+
+    // q_T = x_T @ Wq
+    for (let i = 0; i < D; i++) {
+      const satir = i * D;
+      const xi = di.x[T][i];
+      let toplam = 0;
+      for (let j = 0; j < D; j++) {
+        gd.Wq.veri[satir + j] += xi * dSorgu[j];
+        toplam += d.Wq.veri[satir + j] * dSorgu[j];
+      }
+      dx[T][i] += toplam;
+    }
   }
 
   // k_s = x_s @ Wk ve v_s = x_s @ Wv — her konum için
@@ -461,6 +561,14 @@ export interface EgitimAyarlari {
   yigin: number;
   sicaklik: number;
   kirpma: number;
+  /**
+   * Her konum kendi sonraki karakterini tahmin etsin mi?
+   *
+   * Açıkken bir ileri geçişten C tahmin birden çıkar ve gradyan C ayrı
+   * yerden akar. Yalnızca dikkat açıkken mümkün; dikkatsiz kurulumda bağlam
+   * tek bir vektöre indiği için konum diye bir şey kalmıyor.
+   */
+  tumKonumlar: boolean;
 }
 
 export const VARSAYILAN_EGITIM: EgitimAyarlari = {
@@ -468,6 +576,7 @@ export const VARSAYILAN_EGITIM: EgitimAyarlari = {
   yigin: 32,
   sicaklik: 1,
   kirpma: 5,
+  tumKonumlar: true,
 };
 
 export interface Egitici {
@@ -498,12 +607,29 @@ export function egiticiOlustur(
   };
 }
 
-/** Metinden rastgele bir konum seçip (bağlam, hedef) çifti üretir. */
-function ornekSec(e: Egitici, baslangic: number, bitis: number): { baglam: number[]; hedef: number } {
+/**
+ * Metinden rastgele bir pencere seçer.
+ *
+ * `hedefler` her konumun tahmin etmesi gereken karakteri tutar: t konumunun
+ * hedefi bir sonraki karakterdir, son konumunki de bütün pencerenin hedefi.
+ * Tek hedefli kip yalnızca sonuncusunu kullanır.
+ *
+ * Pencere metnin en az C karakter içinden seçilir; böylece başa boşluk
+ * doldurmak gerekmiyor ve hedefler konumlarla birebir hizalı kalıyor.
+ */
+function ornekSec(
+  e: Egitici,
+  baslangic: number,
+  bitis: number,
+): { baglam: number[]; hedefler: number[] } {
   const C = e.model.ayar.baglam;
-  const konum = baslangic + Math.floor(e.rnd() * (bitis - baslangic));
-  const bas = Math.max(0, konum - C);
-  return { baglam: e.veri.ids.slice(bas, konum), hedef: e.veri.ids[konum] };
+  const enAz = Math.max(baslangic, C);
+  const konum = enAz + Math.floor(e.rnd() * Math.max(1, bitis - enAz));
+  const bas = konum - C;
+  const baglam = e.veri.ids.slice(bas, konum);
+  const hedefler: number[] = [];
+  for (let t = 0; t < C; t++) hedefler.push(e.veri.ids[bas + t + 1]);
+  return { baglam, hedefler };
 }
 
 /**
@@ -512,12 +638,19 @@ function ornekSec(e: Egitici, baslangic: number, bitis: number): { baglam: numbe
  */
 export function egitimAdimi(e: Egitici): number {
   gradyanSifirla(e.grad);
+  // Her konum ancak dikkat açıkken tahmin edebilir.
+  const tumKonumlar = e.ayar.tumKonumlar && e.model.dikkat !== null;
   let toplamKayip = 0;
   for (let n = 0; n < e.ayar.yigin; n++) {
-    const { baglam, hedef } = ornekSec(e, 1, e.veri.ayrim);
-    const iz = ileriGecis(e.model, baglam, 1); // eğitimde sıcaklık her zaman 1
-    toplamKayip += kayip(iz.olasilik, hedef);
-    geriYayilim(e.model, iz, hedef, e.grad);
+    const { baglam, hedefler } = ornekSec(e, 1, e.veri.ayrim);
+    const iz = ileriGecis(e.model, baglam, 1, tumKonumlar); // eğitimde sıcaklık her zaman 1
+    if (tumKonumlar) {
+      toplamKayip += geriYayilimTumKonumlar(e.model, iz, hedefler, e.grad);
+    } else {
+      const hedef = hedefler[hedefler.length - 1];
+      toplamKayip += kayip(iz.olasilik, hedef);
+      geriYayilim(e.model, iz, hedef, e.grad);
+    }
   }
   gradyanUygula(e.model, e.grad, e.ayar.ogrenmeOrani, 1 / e.ayar.yigin, e.ayar.kirpma);
   e.adim++;
@@ -529,6 +662,10 @@ export function egitimAdimi(e: Egitici): number {
 /**
  * Ayrılmış doğrulama bölümünde kaybı ölçer. Ağırlıklara dokunmaz.
  * Rastgele değil, düzenli aralıklarla örnekler — ölçüm gürültüsü düşük olsun.
+ *
+ * ÖLÇÜLEN ŞEY HER ZAMAN AYNI: tam bağlam görmüş son konumun bir sonraki
+ * karakteri ne kadar iyi bildiği. Eğitim kipi değişse de bu ölçüt sabit
+ * kalıyor, yoksa farklı kurulumların sayıları karşılaştırılamazdı.
  */
 export function dogrulamaKaybi(model: Model, veri: Veri, ornekSayisi = 200): number {
   const C = model.ayar.baglam;

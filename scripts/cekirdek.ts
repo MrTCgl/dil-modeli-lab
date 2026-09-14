@@ -24,6 +24,7 @@ import {
 import {
   type Gradyan,
   dogrulamaKaybi,
+  geriYayilimTumKonumlar,
   egiticiOlustur,
   egitimAdimi,
   geriYayilim,
@@ -146,9 +147,74 @@ function gradyanSina(model: Model, baglam: number[], hedef: number): void {
   console.log(`\nEn kötü bağıl fark: ${enKotu.toExponential(2)} → ${enKotu < 1e-3 ? "GEÇTİ" : "KALDI"}`);
 }
 
+/**
+ * "Her konum tahmin etsin" kipinin gradyanı ayrı bir yol: sekiz konumun
+ * sekiz kaybı, dikkat haritasının sekiz satırı, sekiz ayrı softmax türevi.
+ * Ayrı yol ayrı sınama istiyor.
+ */
+function cokKonumluSina(model: Model, baglam: number[], hedefler: number[]): void {
+  const grad = gradyanOlustur(model);
+  const iz = ileriGecis(model, baglam, 1, true);
+  geriYayilimTumKonumlar(model, iz, hedefler, grad);
+
+  const C = hedefler.length;
+  const ortalamaKayip = () => {
+    const i2 = ileriGecis(model, baglam, 1, true);
+    let toplam = 0;
+    for (let t = 0; t < C; t++) toplam += kayip(i2.konumlar![t].olasilik, hedefler[t]);
+    return toplam / C;
+  };
+
+  const adaylar: Array<{ ad: string; agirlik: Float32Array; gradyan: Float32Array }> = [
+    { ad: "E", agirlik: model.E.veri, gradyan: grad.E.veri },
+    { ad: "P (pozisyon)", agirlik: model.P!.veri, gradyan: grad.P!.veri },
+    { ad: "Wq (sorgu)", agirlik: model.dikkat!.Wq.veri, gradyan: grad.dikkat!.Wq.veri },
+    { ad: "Wk (anahtar)", agirlik: model.dikkat!.Wk.veri, gradyan: grad.dikkat!.Wk.veri },
+    { ad: "Wv (değer)", agirlik: model.dikkat!.Wv.veri, gradyan: grad.dikkat!.Wv.veri },
+    { ad: "Wo (dikkat çıkışı)", agirlik: model.dikkat!.Wo.veri, gradyan: grad.dikkat!.Wo.veri },
+    { ad: "W1 (katman 1)", agirlik: model.bloklar[0].W1.veri, gradyan: grad.bloklar[0].W1.veri },
+    { ad: "W2 (katman 2)", agirlik: model.bloklar[1].W2.veri, gradyan: grad.bloklar[1].W2.veri },
+    { ad: "Wçıkış", agirlik: model.Wcikis.veri, gradyan: grad.Wcikis.veri },
+  ];
+
+  console.log("matris              indeks   analitik      sayısal   bağıl fark  (eps)");
+  let enKotu = 0;
+  for (const aday of adaylar) {
+    let indeks = 0;
+    let enBuyuk = 0;
+    for (let i = 0; i < aday.gradyan.length; i++) {
+      const v = Math.abs(aday.gradyan[i]);
+      if (v > enBuyuk) { enBuyuk = v; indeks = i; }
+    }
+    const analitik = aday.gradyan[indeks];
+    const eski = aday.agirlik[indeks];
+    let enIyi = Infinity;
+    let enIyiSayisal = 0;
+    let enIyiEps = 0;
+    for (const eps of [1e-2, 1e-3]) {
+      aday.agirlik[indeks] = eski + eps;
+      const arti = ortalamaKayip();
+      aday.agirlik[indeks] = eski - eps;
+      const eksi = ortalamaKayip();
+      aday.agirlik[indeks] = eski;
+      const sayisal = (arti - eksi) / (2 * eps);
+      const fark = Math.abs(analitik - sayisal) / Math.max(1e-8, Math.abs(analitik) + Math.abs(sayisal));
+      if (fark < enIyi) { enIyi = fark; enIyiSayisal = sayisal; enIyiEps = eps; }
+    }
+    enKotu = Math.max(enKotu, enIyi);
+    console.log(
+      `${aday.ad.padEnd(19)} ${String(indeks).padStart(6)}  ${say(analitik, 6)}  ${say(enIyiSayisal, 6)}  ${enIyi.toExponential(2)}  (${enIyiEps})`,
+    );
+  }
+  console.log(`\nEn kötü bağıl fark: ${enKotu.toExponential(2)} → ${enKotu < 1e-3 ? "GEÇTİ" : "KALDI"}`);
+}
+
 const sinaModel = modelOlustur({ D: 16, katmanSayisi: 2, baglam: 8, seed: 7, dikkat: true });
-console.log(`Model: D=16, 2 katman, bağlam=8 — ${parametreSayisi(sinaModel).toLocaleString("tr-TR")} parametre\n`);
+console.log(`Model: D=16, 2 katman, bağlam=8 — ${parametreSayisi(sinaModel).toLocaleString("tr-TR")} parametre`);
+console.log("\n--- tek hedefli kip (yalnızca son konum tahmin ediyor) ---\n");
 gradyanSina(sinaModel, veri.ids.slice(100, 108), veri.ids[108]);
+console.log("\n--- her konum tahmin etsin kipi (sekiz hedef birden) ---\n");
+cokKonumluSina(sinaModel, veri.ids.slice(100, 108), veri.ids.slice(101, 109));
 
 // ---------------------------------------------------------------------------
 cizgi("3. EĞİTİM");
@@ -161,7 +227,7 @@ console.log(`Rastgele modelin beklenen kaybı: ln(V) = ${RASTGELE_KAYIP.toFixed(
 console.log(`\nEğitimden ÖNCE üretilen metin:`);
 console.log(`  "${decode(baslangic)}${decode(uret(model, baslangic, 120, 0.8, rnd))}"`);
 
-const egitici = egiticiOlustur(model, veri, { ogrenmeOrani: 0.2, yigin: 32, sicaklik: 1, kirpma: 5 });
+const egitici = egiticiOlustur(model, veri, { ogrenmeOrani: 0.2, yigin: 32, sicaklik: 1, kirpma: 5, tumKonumlar: true });
 
 console.log(`\n adım    eğitim kaybı   doğrulama    süre`);
 const basla = Date.now();
@@ -473,11 +539,21 @@ cizgi("8. DİKKAT KATMANI NE KATIYOR?");
  * Dikkatli modelin ayrıca DAHA AZ parametresi var: Wgiriş tek başına 2.048
  * sayı tutuyor, dikkat katmanı pozisyon gömmeleriyle birlikte 1.152. Yani
  * karşılaştırma dikkatin lehine şişirilmiş değil.
+ *
+ * Eğitim kipi burada bilerek SABİT tutuluyor (ikisi de tek hedefli): yoksa
+ * iki değişken birden değişir ve farkın hangisinden geldiği anlaşılmaz.
+ * "Her konum tahmin etsin" kipinin etkisi bir sonraki bölümde, dikkat açık
+ * sabitlenerek ölçülüyor.
  */
 {
   function egit(dikkat: boolean, adimSayisi: number) {
     const m = modelOlustur({ D: 16, katmanSayisi: 2, baglam: 8, seed: 1, dikkat });
-    const e = egiticiOlustur(m, veri, { ogrenmeOrani: 0.2, yigin: 32, sicaklik: 1, kirpma: 5 }, 4242);
+    const e = egiticiOlustur(
+      m,
+      veri,
+      { ogrenmeOrani: 0.2, yigin: 32, sicaklik: 1, kirpma: 5, tumKonumlar: false },
+      4242,
+    );
     for (let i = 0; i < adimSayisi; i++) egitimAdimi(e);
     const son50 = e.gecmis.slice(-50).reduce((a, b) => a + b, 0) / 50;
     return { model: m, egitimKaybi: son50, dogrulama: dogrulamaKaybi(m, veri, 200), parametre: parametreSayisi(m) };
@@ -547,5 +623,84 @@ cizgi("8. DİKKAT KATMANI NE KATIYOR?");
       console.log(`  t−${C - t}  ${ALFABE[iz3.baglamIds[t]] === " " ? "␣" : ALFABE[iz3.baglamIds[t]]}  ${(sonSatir[t] * 100).toFixed(1).padStart(5)}%  ${cubuk}`);
     }
   }
+}
+console.log();
+
+// ---------------------------------------------------------------------------
+cizgi("9. HER KONUM TAHMİN EDERSE");
+
+/**
+ * Bir ileri geçişte sekiz tahmin birden üretmek adım başına sekiz kat fazla
+ * sinyal veriyor — ama adım da yaklaşık o kadar pahalılaşıyor, çünkü MLP
+ * blokları ve çıkış katmanı her konum için ayrı çalışıyor.
+ *
+ * Bu yüzden iki ayrı karşılaştırma yapıyoruz:
+ *   - aynı adım sayısında (örnek verimliliği),
+ *   - aynı sürede (hesap verimliliği — asıl sorulması gereken).
+ *
+ * Doğrulama kaybı her iki kipte de aynı şeyi ölçüyor: tam bağlam görmüş son
+ * konumun bir sonraki karakteri ne kadar iyi bildiği. Kipler arası
+ * karşılaştırma ancak böyle anlamlı olur.
+ */
+{
+  function kur(tumKonumlar: boolean) {
+    const m = modelOlustur({ D: 16, katmanSayisi: 2, baglam: 8, seed: 1, dikkat: true });
+    const e = egiticiOlustur(m, veri, { ogrenmeOrani: 0.2, yigin: 32, sicaklik: 1, kirpma: 5, tumKonumlar }, 4242);
+    return { m, e };
+  }
+
+  console.log("AYNI ADIM SAYISINDA (3000 adım)");
+  console.log("kip                  adım   süre     doğrulama");
+  const adimSonuclari: Record<string, { sure: number; dogrulama: number; adim: number }> = {};
+  for (const [ad, tum] of [["tek hedef", false], ["her konum", true]] as Array<[string, boolean]>) {
+    const { m, e } = kur(tum);
+    const t0 = Date.now();
+    for (let i = 0; i < 3000; i++) egitimAdimi(e);
+    const sure = (Date.now() - t0) / 1000;
+    const dog = dogrulamaKaybi(m, veri, 200);
+    adimSonuclari[ad] = { sure, dogrulama: dog, adim: 3000 };
+    console.log(`${ad.padEnd(18)}${String(3000).padStart(6)}   ${sure.toFixed(1)}s      ${say(dog)}`);
+  }
+  console.log(
+    `→ aynı adımda fark ${say(adimSonuclari["tek hedef"].dogrulama - adimSonuclari["her konum"].dogrulama)}` +
+      ` · bir adım ${(adimSonuclari["her konum"].sure / adimSonuclari["tek hedef"].sure).toFixed(1)} kat daha pahalı`,
+  );
+
+  /**
+   * Süreye dayalı ölçüm makinenin o anki yüküne duyarlı: tek çalıştırmanın
+   * sayısı çalıştırmadan çalıştırmaya oynuyor. Üç kez tekrarlayıp aralığı da
+   * yazıyoruz; tek bir sayıya bakıp hüküm vermek yanıltıcı olurdu.
+   */
+  console.log("\nAYNI SÜREDE (her kip için 3 kez × 5 saniye)");
+  console.log("kip                 ortalama adım   doğrulama (en iyi – en kötü)");
+  const SURE = 5000;
+  const TEKRAR = 3;
+  const sureSonuclari: Record<string, { adim: number; dogrulamalar: number[] }> = {};
+  for (const [ad, tum] of [["tek hedef", false], ["her konum", true]] as Array<[string, boolean]>) {
+    const dogrulamalar: number[] = [];
+    let toplamAdim = 0;
+    for (let r = 0; r < TEKRAR; r++) {
+      const { m, e } = kur(tum);
+      const t0 = Date.now();
+      while (Date.now() - t0 < SURE) {
+        for (let i = 0; i < 25; i++) egitimAdimi(e);
+      }
+      toplamAdim += e.adim;
+      dogrulamalar.push(dogrulamaKaybi(m, veri, 200));
+    }
+    sureSonuclari[ad] = { adim: Math.round(toplamAdim / TEKRAR), dogrulamalar };
+    const ort = dogrulamalar.reduce((a, b) => a + b, 0) / TEKRAR;
+    console.log(
+      `${ad.padEnd(18)}${String(sureSonuclari[ad].adim).padStart(10)}   ${say(ort)}  (${say(Math.min(...dogrulamalar))} – ${say(Math.max(...dogrulamalar))})`,
+    );
+  }
+  const ortalama = (x: number[]) => x.reduce((a, b) => a + b, 0) / x.length;
+  const fark = ortalama(sureSonuclari["tek hedef"].dogrulamalar) - ortalama(sureSonuclari["her konum"].dogrulamalar);
+  const yayilim =
+    Math.max(...sureSonuclari["tek hedef"].dogrulamalar) - Math.min(...sureSonuclari["tek hedef"].dogrulamalar);
+  console.log(
+    `→ aynı sürede ortalama fark ${say(fark)} · tek kipin kendi içindeki yayılım ${say(yayilim)}` +
+      `\n  → ${Math.abs(fark) < yayilim ? "fark ölçüm gürültüsünün içinde kalıyor: aynı sürede başabaş" : fark > 0 ? "her konum tahmin etmek aynı sürede de KAZANDIRIYOR" : "aynı sürede tek hedef önde"}`,
+  );
 }
 console.log();

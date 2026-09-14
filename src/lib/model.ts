@@ -348,6 +348,19 @@ export interface DikkatIzi {
   cikti: Float32Array[];
 }
 
+/**
+ * Tek bir konumun dikkat sonrası zinciri: MLP blokları, çıkış katmanı,
+ * softmax. Her konum kendi zincirinden geçer — bloklar ve çıkış katmanı
+ * konumlar arasında PAYLAŞILIR, yani aynı ağırlıklar her konuma uygulanır.
+ */
+export interface KonumIzi {
+  /** Zincire giren vektör (dikkat çıkışı). */
+  h0: Float32Array;
+  bloklar: BlokIzi[];
+  logits: Float32Array;
+  olasilik: Float32Array;
+}
+
 export interface IleriIz {
   baglamIds: number[];
   /** Her bağlam pozisyonunun gömme vektörü (C tane, D uzunluğunda). */
@@ -364,9 +377,23 @@ export interface IleriIz {
   /** Olasılıklar (sıcaklık uygulanmış). */
   olasilik: Float32Array;
   sicaklik: number;
+  /**
+   * Her konumun kendi tahmini. Yalnızca istendiğinde ve yalnızca dikkat
+   * açıkken doldurulur.
+   *
+   * Dikkatsiz kurulumda bağlam tek bir vektöre indiği için "konumlar" diye
+   * bir şey kalmıyor — her tahmin ayrı bir ileri geçiş gerektiriyor. Aynı
+   * geçişte sekiz tahmin birden üretebilmek dikkatin yapısal getirisi.
+   */
+  konumlar: KonumIzi[] | null;
 }
 
-export function ileriGecis(model: Model, baglamIds: number[], sicaklik = 1): IleriIz {
+export function ileriGecis(
+  model: Model,
+  baglamIds: number[],
+  sicaklik = 1,
+  tumKonumlar = false,
+): IleriIz {
   const { D, baglam } = model.ayar;
 
   // 1-2) Gömme araması. Bağlam kısaysa baştan boşlukla doldururuz.
@@ -395,7 +422,34 @@ export function ileriGecis(model: Model, baglamIds: number[], sicaklik = 1): Ile
     throw new Error("model ne dikkat ne giriş projeksiyonu içeriyor");
   }
 
-  // 4) MLP blokları
+  // 4-6) MLP blokları, çıkış katmanı, softmax — son konum için
+  const son = konumZinciri(model, h0, sicaklik);
+
+  // İstenirse her konum kendi tahminini de üretir. Bloklar ve çıkış katmanı
+  // paylaşıldığı için ek parametre yok, sadece ek hesap var.
+  let konumlar: KonumIzi[] | null = null;
+  if (tumKonumlar && dikkatIzi) {
+    konumlar = dikkatIzi.cikti.map((y, t) =>
+      t === baglam - 1 ? son : konumZinciri(model, y, sicaklik),
+    );
+  }
+
+  return {
+    baglamIds: ids,
+    gommeler,
+    birlesik,
+    dikkat: dikkatIzi,
+    h0,
+    bloklar: son.bloklar,
+    logits: son.logits,
+    olasilik: son.olasilik,
+    sicaklik,
+    konumlar,
+  };
+}
+
+/** Bir vektörü MLP bloklarından ve çıkış katmanından geçirir. */
+function konumZinciri(model: Model, h0: Float32Array, sicaklik: number): KonumIzi {
   let h = h0;
   const izler: BlokIzi[] = [];
   for (const blok of model.bloklar) {
@@ -409,12 +463,8 @@ export function ileriGecis(model: Model, baglamIds: number[], sicaklik = 1): Ile
     izler.push({ girdi, oncesi, relu, dal, cikti });
     h = cikti;
   }
-
-  // 5-6) Çıkış katmanı ve softmax
   const logits = vektorMatris(h, model.Wcikis, model.bcikis);
-  const olasilik = softmax(logits, sicaklik);
-
-  return { baglamIds: ids, gommeler, birlesik, dikkat: dikkatIzi, h0, bloklar: izler, logits, olasilik, sicaklik };
+  return { h0, bloklar: izler, logits, olasilik: softmax(logits, sicaklik) };
 }
 
 /**

@@ -42,7 +42,16 @@ import { Kaydirac, KaydiracPaneli } from "./Kaydiraclar.tsx";
 import { Uretim } from "./Uretim.tsx";
 
 /** Ekran saniyede kaç kez tazelensin. */
-const TAZELEME_ARALIGI = 125;
+const TAZELEME_ARALIGI = 160;
+/**
+ * Küre ve dikkat haritası bunun katlarında tazelenir.
+ *
+ * İkisi de pahalı çizimler (biri WebGL sahnesi, diğeri yazı dolu bir tuval)
+ * ve ikisinin de bilgisi yavaş değişiyor: gömmelerin yerleri ve dikkat
+ * dağılımı saniyede altı kez bakılacak şeyler değil. Kayıp eğrisi ve sayılar
+ * tam hızda kalıyor, onlar ucuz.
+ */
+const AGIR_CIZIM_KATI = 3;
 
 export default function EgitimEkrani() {
   const [durum, setDurum] = useState(VARSAYILAN_DURUM);
@@ -68,6 +77,12 @@ export default function EgitimEkrani() {
   const dogrulamaRef = useRef<DogrulamaNoktasi[]>([]);
   const sonTazelemeRef = useRef(0);
   const zamanlayiciRef = useRef<number | null>(null);
+  // Adım sayısı ve çalışma durumu da ref'te birikir: bunlar da birer React
+  // durumu ve her worker mesajında güncellenirlerse bütün ağaç (küre, dikkat
+  // haritası, on iki ızgara) o hızda yeniden çizilir. Worker saniyede kırk
+  // mesaj gönderebiliyor; ekranı o hızda tazelemenin bir faydası yok.
+  const adimRef = useRef(0);
+  const calisiyorRef = useRef(false);
 
   const [adim, setAdim] = useState(0);
   const [calisiyor, setCalisiyor] = useState(false);
@@ -81,6 +96,8 @@ export default function EgitimEkrani() {
   const tazele = useCallback(() => {
     sonTazelemeRef.current = performance.now();
     setCizim({ kayiplar: kayipRef.current.slice(), dogrulama: dogrulamaRef.current.slice() });
+    setAdim(adimRef.current);
+    setCalisiyor(calisiyorRef.current);
     setSurum((s) => s + 1);
   }, []);
 
@@ -112,8 +129,8 @@ export default function EgitimEkrani() {
         agirliklariYaz(ayna, cevap.agirliklar);
         kayipRef.current = [];
         dogrulamaRef.current = [];
-        setAdim(0);
-        setCalisiyor(false);
+        adimRef.current = 0;
+        calisiyorRef.current = false;
         setTokenSayisi(cevap.tokenSayisi);
         tazele();
         return;
@@ -126,8 +143,8 @@ export default function EgitimEkrani() {
         }
       }
       if (cevap.agirliklar) agirliklariYaz(ayna, cevap.agirliklar);
-      setAdim(cevap.adim);
-      setCalisiyor(cevap.calisiyor);
+      adimRef.current = cevap.adim;
+      calisiyorRef.current = cevap.calisiyor;
       if (!cevap.calisiyor) tazele();
       else tazelemeIste();
     };
@@ -135,7 +152,13 @@ export default function EgitimEkrani() {
     const istek: EgitimIstegi = {
       tur: "kur",
       ayar: ayna.ayar,
-      egitim: { ogrenmeOrani: durum.ogrenmeOrani, yigin: 32, sicaklik: 1, kirpma: 5 },
+      egitim: {
+        ogrenmeOrani: durum.ogrenmeOrani,
+        yigin: 32,
+        sicaklik: 1,
+        kirpma: 5,
+        tumKonumlar: durum.tumKonumlar,
+      },
     };
     worker.postMessage(istek);
 
@@ -149,13 +172,13 @@ export default function EgitimEkrani() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ayna]);
 
-  // Öğrenme oranı eğitim sürerken bile canlı uygulanır.
+  // Öğrenme oranı ve eğitim kipi, eğitim sürerken bile canlı uygulanır.
   useEffect(() => {
     workerRef.current?.postMessage({
       tur: "egitimAyari",
-      egitim: { ogrenmeOrani: durum.ogrenmeOrani },
+      egitim: { ogrenmeOrani: durum.ogrenmeOrani, tumKonumlar: durum.tumKonumlar },
     } satisfies EgitimIstegi);
-  }, [durum.ogrenmeOrani]);
+  }, [durum.ogrenmeOrani, durum.tumKonumlar]);
 
   const gonder = (istek: EgitimIstegi) => workerRef.current?.postMessage(istek);
 
@@ -193,10 +216,36 @@ export default function EgitimEkrani() {
           kayiplar={cizim.kayiplar}
           dogrulama={cizim.dogrulama}
           genislik={Math.max(300, genislik - 26)}
+          tumKonumlar={durum.dikkat && durum.tumKonumlar}
         />
       </section>
 
       <KaydiracPaneli>
+        <div>
+          <div className="flex items-baseline justify-between gap-2">
+            <span className={`text-[12px] ${durum.dikkat ? "text-metin" : "text-cok-soluk"}`}>
+              Her konum tahmin etsin
+            </span>
+            <button
+              onClick={() => setDurum((d) => ({ ...d, tumKonumlar: !d.tumKonumlar }))}
+              disabled={!durum.dikkat}
+              className={`border px-2 py-0.5 text-[11px] transition-colors disabled:opacity-40 ${
+                durum.tumKonumlar && durum.dikkat
+                  ? "border-cizgi-parlak text-metin"
+                  : "border-cizgi text-cok-soluk hover:text-soluk"
+              }`}
+            >
+              {durum.dikkat ? (durum.tumKonumlar ? "açık" : "kapalı") : "dikkat gerekli"}
+            </button>
+          </div>
+          <p className="mt-2 text-[10px] leading-snug text-cok-soluk">
+            Açıkken bir ileri geçişten sekiz tahmin birden çıkar ve gradyan sekiz ayrı yerden akar;
+            bir adım yaklaşık dört kat pahalılaşır ama aynı sürede bile daha iyi sonuç verir.
+            Yalnızca dikkat açıkken mümkün: dikkatsiz kurulumda bağlam tek bir vektöre indiği için
+            konum diye bir şey kalmıyor. Eğitim sürerken de değiştirilebilir.
+          </p>
+        </div>
+
         <div className={calisiyor ? "opacity-45" : undefined}>
           <div className="flex items-baseline justify-between gap-2">
             <span className="text-[12px] text-metin">Dikkat katmanı</span>
@@ -298,10 +347,10 @@ export default function EgitimEkrani() {
       <div className="grid gap-4 lg:grid-cols-2">
         <section className="border border-cizgi bg-yuzey p-3">
           <h2 className="mb-2 text-[13px] font-medium text-metin">Gömme küresi</h2>
-          <GommeKuresi model={ayna} surum={surum} yukseklik={400} />
+          <GommeKuresi model={ayna} surum={Math.floor(surum / AGIR_CIZIM_KATI)} yukseklik={400} />
         </section>
         {durum.dikkat ? (
-          <CanliDikkat model={ayna} metin={durum.metin} surum={surum} />
+          <CanliDikkat model={ayna} metin={durum.metin} surum={Math.floor(surum / AGIR_CIZIM_KATI)} />
         ) : (
           <section className="border border-cizgi bg-yuzey p-3">
             <h2 className="mb-2 text-[13px] font-medium text-metin">Dikkat haritası</h2>

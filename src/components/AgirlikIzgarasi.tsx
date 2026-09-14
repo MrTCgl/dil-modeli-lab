@@ -48,8 +48,11 @@ const PARLAMA_SURESI = 700; // ms
  * birleştiricisi tıkanıyor ve sayfa — hesap worker'da olmasına rağmen —
  * takılıyordu. Ölçüm: kareler arası süre 16,7 ms'ten 70 ms'e çıkıyordu.
  * Gözün ayırt edemeyeceği bir tazeleme hızı için ödenecek bedel değil.
+ * 700 ms süren bir sönme için saniyede on iki kare fazlasıyla yeter; bu
+ * sınırı 20 fps'ten 12 fps'e çekmek eğitim sırasındaki ortalama kare
+ * süresini 41 ms'ten 35 ms'e indirdi.
  */
-const PARLAMA_ARALIGI = 50; // ms (~20 fps)
+const PARLAMA_ARALIGI = 80; // ms (~12 fps)
 /**
  * Parlama eşiği: o güncellemedeki en büyük değişimin bu oranını aşan
  * hücreler parlar.

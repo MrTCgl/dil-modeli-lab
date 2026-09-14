@@ -101,7 +101,13 @@ export default function TTTKarsilastirma() {
     worker.postMessage({
       tur: "kur",
       ayar: temel.ayar,
-      egitim: { ogrenmeOrani: durum.ogrenmeOrani, yigin: 32, sicaklik: 1, kirpma: 5 },
+      egitim: {
+        ogrenmeOrani: durum.ogrenmeOrani,
+        yigin: 32,
+        sicaklik: 1,
+        kirpma: 5,
+        tumKonumlar: durum.tumKonumlar,
+      },
     } satisfies EgitimIstegi);
     return () => {
       worker.terminate();
