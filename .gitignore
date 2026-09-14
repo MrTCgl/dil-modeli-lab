@@ -1,0 +1,34 @@
+# bağımlılıklar
+node_modules/
+.pnp
+.pnp.js
+
+# build çıktıları
+dist/
+.output/
+.astro/
+build/
+
+# ortam değişkenleri
+.env
+.env.*
+!.env.example
+
+# günlükler
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# editör ve işletim sistemi
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# test ve önbellek
+coverage/
+.cache/
+*.tsbuildinfo
