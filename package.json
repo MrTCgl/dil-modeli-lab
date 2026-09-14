@@ -6,9 +6,29 @@
   "description": "Tarayıcıda gerçekten eğitilen, karakter düzeyinde minik bir dil modelinin her sayısını görünür kılan öğretici laboratuvar.",
   "license": "MIT",
   "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "kontrol": "astro check && tsc --noEmit",
     "cekirdek": "node --experimental-strip-types scripts/cekirdek.ts"
   },
   "devDependencies": {
+    "@types/d3-interpolate": "3.0.4",
+    "@types/d3-scale": "4.0.9",
+    "@types/d3-scale-chromatic": "3.1.0",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
     "typescript": "^5.7.3"
+  },
+  "dependencies": {
+    "@astrojs/react": "6.0.5",
+    "@tailwindcss/vite": "4.3.3",
+    "astro": "7.3.2",
+    "d3-interpolate": "3.0.1",
+    "d3-scale": "4.0.2",
+    "d3-scale-chromatic": "3.1.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "tailwindcss": "4.3.3"
   }
 }
